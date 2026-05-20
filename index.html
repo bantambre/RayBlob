@@ -51,14 +51,38 @@
     </div>
     <div class="field"><label># Blobs</label><input id="nBlobs" type="number" min="1" max="2" value="1"></div>
     <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="2" max="8" value="4"></div>
-    <div class="field"><label>Spread</label><input id="spread" type="number" min="0.2" max="3.0" step="0.1" value="1.0"></div>
-    <div class="field"><label>Smoothing k</label><input id="smoothK" type="number" min="0.05" max="0.8" step="0.05" value="0.3"></div>
+    <div class="field"><label>Spread</label><input id="spread" type="number" min="0.2" max="3.0" step="0.1" value="0.6"></div>
+    <div class="field"><label>Smoothing k</label><input id="smoothK" type="number" min="0.05" max="0.8" step="0.05" value="0.4"></div>
     <div class="field"><label>Cam tilt (°)</label><input id="camTilt" type="number" min="-20" max="20" step="0.5" value="6"></div>
 
     <h2>Hatching (Pasma)</h2>
     <div class="field"><label>lw (mm)</label><input id="lw" type="number" min="0.1" max="1.0" step="0.05" value="0.3"></div>
-    <div class="field"><label>Density ×lw</label><input id="density" type="number" min="1.5" max="6" step="0.25" value="2.5"></div>
+    <div class="field"><label>Density ×lw</label><input id="density" type="number" min="1.7" max="6" step="0.1" value="2.75"></div>
     <div class="field"><label>Buffer res</label><input id="bufRes" type="number" min="200" max="800" step="50" value="450"></div>
+
+    <h2>Hatching style</h2>
+    <div class="field"><label>Style</label>
+      <select id="hatchStyle"
+              style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
+        <option value="pasma" selected>Pasma classic</option>
+        <option value="light">Light contours</option>
+        <option value="polar">Polar grid</option>
+        <option value="hybrid">Light + polar</option>
+      </select>
+    </div>
+    <div class="field"><label>Hatch angle (°)</label><input id="hatchAngle" type="number" min="-90" max="90" step="5" value="30"></div>
+    <div class="field"><label>Polar axis</label>
+      <select id="polarAxis"
+              style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
+        <option value="Y" selected>Y (world up)</option>
+        <option value="X">X (world side)</option>
+        <option value="Z">Z (depth)</option>
+        <option value="view">Camera up</option>
+      </select>
+    </div>
+    <div class="field"><label>Polar threshold</label><input id="polarThreshold" type="number" min="0.2" max="1.0" step="0.05" value="0.5"></div>
+    <div class="field"><label>Highlight cutoff</label><input id="highlightCutoff" type="number" min="0.25" max="0.95" step="0.025" value="0.65"></div>
+    <div class="field"><label>Shadow cutoff</label><input id="shadowCutoff" type="number" min="0.2" max="0.7" step="0.025" value="0.5"></div>
 
     <h2>Light</h2>
     <div class="field"><label>Light X</label><input id="lx" type="number" step="0.1" value="-0.6"></div>
@@ -445,6 +469,32 @@ function claimPath(path, buf, claim, claimR) {
   }
 }
 
+// Split a traced streamline into sub-paths based on per-point lightness.
+// The streamline still claims its full footprint (so neighbors keep spacing),
+// but we DRAW only where light < `cutoff`. Highlights → empty, shadows → solid.
+// Optional `gateMin` cuts the *other* end too (e.g. cross-hatch is only useful
+// in deep shadow, so pass gateMin=0.55 to drop everything lighter than that).
+function clipByLight(path, buf, cutoff, gateMin) {
+  const segments = [];
+  let current = [];
+  for (let i = 0; i < path.length; i++) {
+    const p = path[i];
+    const idx = bufIdx(buf, p[0], p[1]);
+    const light = idx >= 0 ? buf.light[idx] : 1.0;
+    const draw = (light < cutoff) && (gateMin === undefined || light < gateMin);
+    if (draw) {
+      current.push(p);
+    } else if (current.length >= 2) {
+      segments.push(current);
+      current = [];
+    } else {
+      current = [];
+    }
+  }
+  if (current.length >= 2) segments.push(current);
+  return segments;
+}
+
 function generateBlobHatches(state, buf, cam) {
   const paths = [];
   const W = buf.W, H = buf.H;
@@ -475,8 +525,11 @@ function generateBlobHatches(state, buf, cam) {
       const bwd = traceTangent(ssx, ssy, -1, buf, cam, L, claim, stepScreen, false);
       const path = [...bwd.reverse(), [ssx, ssy], ...fwd];
       if (path.length >= 3) {
-        paths.push(path);
+        // Claim the full streamline so neighboring streamlines space correctly,
+        // but only draw the portion where the surface is shaded.
         claimPath(path, buf, claim, claimR);
+        const segs = clipByLight(path, buf, state.highlightCutoff);
+        for (const s of segs) paths.push(s);
       }
     }
   }
@@ -484,7 +537,6 @@ function generateBlobHatches(state, buf, cam) {
   // ---- Cross pass: orthogonal hatching in shadow regions ----
   const claimC = new Uint8Array(W * H);
   const jit2 = makeRng(state.seed + ':seedCross');
-  const shadowThreshold = 0.5;
   const seedSpacingC = spacingWorld * 0.85;
   for (let sy = SY_MAX; sy > SY_MIN; sy -= seedSpacingC) {
     for (let sx = SX_MIN; sx < SX_MAX; sx += seedSpacingC) {
@@ -494,17 +546,169 @@ function generateBlobHatches(state, buf, cam) {
       if (ssx < SX_MIN || ssx > SX_MAX || ssy < SY_MIN || ssy > SY_MAX) continue;
       const sIdx = bufIdx(buf, ssx, ssy);
       if (sIdx < 0 || buf.surface[sIdx] !== 1 || claimC[sIdx]) continue;
-      if (buf.light[sIdx] > shadowThreshold) continue;
+      if (buf.light[sIdx] > state.shadowCutoff) continue;   // seed only in shadow
 
       const fwd = traceTangent(ssx, ssy, +1, buf, cam, L, claimC, stepScreen, true);
       const bwd = traceTangent(ssx, ssy, -1, buf, cam, L, claimC, stepScreen, true);
       const path = [...bwd.reverse(), [ssx, ssy], ...fwd];
       if (path.length >= 3) {
-        paths.push(path);
         claimPath(path, buf, claimC, claimR);
+        const segs = clipByLight(path, buf, state.shadowCutoff);
+        for (const s of segs) paths.push(s);
       }
     }
   }
+
+  return paths;
+}
+
+// ============================================================
+// "Pasma classic" — single-angle parallel scan lines across the form
+// with dashed-by-darkness modulation. Closest match to the canonical
+// Universal-Rayhatcher sphere look. No streamlines, no curving — the
+// shading is *entirely* in the dash pattern along straight scan lines.
+// ============================================================
+function generatePasmaHatches(state, buf) {
+  const paths = [];
+  const angle = state.hatchAngle * Math.PI / 180;
+  const ca = Math.cos(angle), sa = Math.sin(angle);
+
+  // Spacing between scan lines (perpendicular)
+  const spacingWorld = state.lw * state.density * WORLD_PER_MM;
+  // Sampling step along each scan line — fine enough that dashes have crisp edges
+  const sampleStep = Math.max(0.0008, spacingWorld * 0.15);
+  // Dash cycle length — 4× the spacing reads as a substantial dash, not a speck.
+  const cycleLen = spacingWorld * 4.0;
+  const RANGE = 1.85;
+
+  // Per-scan-line phase jitter so the dash pattern doesn't form vertical
+  // alignment artifacts between adjacent rows.
+  const phaseJit = makeRng(state.seed + ':pasmaPhase');
+  const floorRange = Math.ceil(RANGE / cycleLen + 2);
+
+  // Tri-zone shading:
+  //   light ≤ shadowCutoff   → onFrac = 1 (solid line through this region)
+  //   light ≥ highlightCutoff → onFrac = 0 (empty paper)
+  //   between                 → linear fade
+  // Make sure the "solid" zone covers at least *some* range, otherwise we
+  // end up with no on-stretch anywhere.
+  const sCut = Math.min(state.shadowCutoff, state.highlightCutoff - 0.05);
+  const hCut = state.highlightCutoff;
+  const fadeRange = hCut - sCut;
+
+  function onFracFor(light) {
+    if (light <= sCut) return 1;
+    if (light >= hCut) return 0;
+    return (hCut - light) / fadeRange;
+  }
+
+  for (let s = -RANGE; s <= RANGE; s += spacingWorld) {
+    const sx0 = -sa * s;
+    const sy0 = ca * s;
+    const phaseOffset = phaseJit();      // [0, 1)
+
+    let inDraw = false;
+    let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+
+    for (let t = -RANGE; t <= RANGE; t += sampleStep) {
+      const sx = sx0 + ca * t;
+      const sy = sy0 + sa * t;
+      let draw = false;
+
+      if (sx >= SX_MIN && sx <= SX_MAX && sy >= SY_MIN && sy <= SY_MAX) {
+        const idx = bufIdx(buf, sx, sy);
+        if (idx >= 0 && buf.surface[idx] === 1) {
+          const onFrac = onFracFor(buf.light[idx]);
+          if (onFrac >= 0.999) {
+            draw = true;                 // solid
+          } else if (onFrac > 0) {
+            const phaseT = t / cycleLen + phaseOffset + floorRange;
+            const phase = phaseT - Math.floor(phaseT);
+            draw = phase < onFrac;
+          }
+        }
+      }
+
+      if (draw) {
+        if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+        lastX = sx; lastY = sy;
+      } else if (inDraw) {
+        if (Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
+          paths.push([[dx0, dy0], [lastX, lastY]]);
+        }
+        inDraw = false;
+      }
+    }
+    if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
+      paths.push([[dx0, dy0], [lastX, lastY]]);
+    }
+  }
+  return paths;
+}
+
+// ============================================================
+// Polar crosshatch: lat + lon streamlines around a fixed pole axis P.
+// Same tangent-field machinery as the light-based pass, but reference vector
+// is P instead of L:
+//   latitude  = N × P            (rings perpendicular to the pole)
+//   longitude = N × (N × P)      (meridians from pole to pole)
+// Drawing is gated by `polarThreshold` (only on surface darker than this).
+// ============================================================
+function generatePolarHatches(state, buf, cam) {
+  const paths = [];
+  const W = buf.W, H = buf.H;
+
+  // Resolve axis
+  let P;
+  switch (state.polarAxis) {
+    case 'X': P = [1, 0, 0]; break;
+    case 'Z': P = [0, 0, 1]; break;
+    case 'view': P = [cam.U[0], cam.U[1], cam.U[2]]; break;
+    default:    P = [0, 1, 0]; break;
+  }
+
+  const spacingWorld = state.lw * state.density * WORLD_PER_MM;
+  const pixPerWorld = (W - 1) / (SX_MAX - SX_MIN);
+  const baseClaimR = Math.max(1, Math.round(spacingWorld * pixPerWorld * 0.42));
+  const stepScreen = Math.max(0.0015, spacingWorld * 0.4);
+  // Polar lat/lon never overrides the highlight cutoff: anything brighter
+  // than `highlightCutoff` always stays empty paper, no matter what the
+  // user puts in `polarThreshold`.
+  const thresh = Math.min(state.polarThreshold, state.highlightCutoff);
+
+  // `spacingMul` widens both seed grid AND claim radius so each polar pass
+  // reads as a sparser overlay on top of the light-based primary pass.
+  function runPass(seedKey, useCross, spacingMul, cutoff) {
+    const sSeed = spacingWorld * 0.85 * spacingMul;
+    const claimR = Math.max(1, Math.round(baseClaimR * spacingMul));
+    const claim = new Uint8Array(W * H);
+    const jit = makeRng(state.seed + ':' + seedKey);
+    for (let sy = SY_MAX; sy > SY_MIN; sy -= sSeed) {
+      for (let sx = SX_MIN; sx < SX_MAX; sx += sSeed) {
+        const jx = (jit() - 0.5) * sSeed * 0.5;
+        const jy = (jit() - 0.5) * sSeed * 0.5;
+        const ssx = sx + jx, ssy = sy + jy;
+        if (ssx < SX_MIN || ssx > SX_MAX || ssy < SY_MIN || ssy > SY_MAX) continue;
+        const sIdx = bufIdx(buf, ssx, ssy);
+        if (sIdx < 0 || buf.surface[sIdx] !== 1 || claim[sIdx]) continue;
+        if (buf.light[sIdx] > cutoff) continue;
+
+        const fwd = traceTangent(ssx, ssy, +1, buf, cam, P, claim, stepScreen, useCross);
+        const bwd = traceTangent(ssx, ssy, -1, buf, cam, P, claim, stepScreen, useCross);
+        const path = [...bwd.reverse(), [ssx, ssy], ...fwd];
+        if (path.length >= 3) {
+          claimPath(path, buf, claim, claimR);
+          const segs = clipByLight(path, buf, cutoff);
+          for (const s of segs) paths.push(s);
+        }
+      }
+    }
+  }
+
+  // Latitude: sparser (1.3×) so primary basket-weave still reads.
+  runPass('polarLat', false, 1.3, thresh);
+  // Longitude: even sparser (1.6×) and only in deeper shadow.
+  runPass('polarLon', true,  1.6, thresh * 0.85);
 
   return paths;
 }
@@ -672,12 +876,18 @@ function readState() {
       ? 'landscape' : 'portrait',
     nBlobs: clampInt(document.getElementById('nBlobs').value, 1, 2, 1),
     nSpheres: clampInt(document.getElementById('nSpheres').value, 2, 8, 4),
-    spread: clampFloat(document.getElementById('spread').value, 0.2, 3.0, 1.0),
-    smoothK: clampFloat(document.getElementById('smoothK').value, 0.05, 0.8, 0.3),
+    spread: clampFloat(document.getElementById('spread').value, 0.2, 3.0, 0.6),
+    smoothK: clampFloat(document.getElementById('smoothK').value, 0.05, 0.8, 0.4),
     camTilt: clampFloat(document.getElementById('camTilt').value, -20, 20, 6),
     lw: clampFloat(document.getElementById('lw').value, 0.05, 2.0, 0.3),
-    density: clampFloat(document.getElementById('density').value, 1.2, 8, 2.5),
+    density: clampFloat(document.getElementById('density').value, 1.7, 8, 2.75),
     bufRes: clampInt(document.getElementById('bufRes').value, 200, 800, 450),
+    hatchStyle: document.getElementById('hatchStyle').value,        // pasma | light | polar | hybrid
+    hatchAngle: clampFloat(document.getElementById('hatchAngle').value, -90, 90, 30),
+    polarAxis: document.getElementById('polarAxis').value,          // X | Y | Z | view
+    polarThreshold: clampFloat(document.getElementById('polarThreshold').value, 0.2, 1.0, 0.7),
+    highlightCutoff: clampFloat(document.getElementById('highlightCutoff').value, 0.25, 0.95, 0.65),
+    shadowCutoff: clampFloat(document.getElementById('shadowCutoff').value, 0.2, 0.7, 0.5),
     lx: clampFloat(document.getElementById('lx').value, -2, 2, -0.6),
     ly: clampFloat(document.getElementById('ly').value, -2, 2, 0.8),
     lz: clampFloat(document.getElementById('lz').value, -2, 2, -0.4),
@@ -697,7 +907,8 @@ function tick() { return new Promise(r => setTimeout(r, 0)); }
 function syncFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const keys = ['seed','orientation','nBlobs','lw','density','nSpheres','spread',
-                'smoothK','camTilt','bufRes','lx','ly','lz'];
+                'smoothK','camTilt','bufRes','hatchStyle','hatchAngle','polarAxis',
+                'polarThreshold','highlightCutoff','shadowCutoff','lx','ly','lz'];
   for (const k of keys) {
     if (params.has(k)) document.getElementById(k).value = params.get(k);
   }
@@ -705,7 +916,8 @@ function syncFromUrl() {
 function writeUrl(state) {
   const params = new URLSearchParams();
   for (const k of ['seed','orientation','nBlobs','lw','density','nSpheres',
-                   'spread','smoothK','camTilt']) {
+                   'spread','smoothK','camTilt','hatchStyle','hatchAngle',
+                   'polarAxis','polarThreshold','highlightCutoff','shadowCutoff']) {
     params.set(k, state[k]);
   }
   const url = window.location.pathname + '?' + params.toString();
@@ -737,9 +949,19 @@ async function doRender() {
     const buf = renderSceneBuffer(state, sdf, cam);
     const t1 = performance.now();
 
-    setStatus('Tracing curved blob hatches…');
+    setStatus('Tracing blob hatches…');
     await tick();
-    const blobPaths = generateBlobHatches(state, buf, cam);
+    let blobPaths = [];
+    if (state.hatchStyle === 'pasma') {
+      blobPaths = generatePasmaHatches(state, buf);
+    } else {
+      if (state.hatchStyle === 'light' || state.hatchStyle === 'hybrid') {
+        blobPaths = blobPaths.concat(generateBlobHatches(state, buf, cam));
+      }
+      if (state.hatchStyle === 'polar' || state.hatchStyle === 'hybrid') {
+        blobPaths = blobPaths.concat(generatePolarHatches(state, buf, cam));
+      }
+    }
     const t2 = performance.now();
 
     setStatus('Ground + sky hatches…');
@@ -782,13 +1004,19 @@ async function doRender() {
       W_IN, H_IN, VB_W, VB_H
     };
 
+    const spacing = state.lw * state.density;
+    const gap = spacing - state.lw;
+    const ratio = gap / state.lw;
+    const ratioWarn = ratio < 0.6
+      ? '  ⚠ gap/lw=' + ratio.toFixed(2) + ' (raise Density for visible hatching)'
+      : '';
     setStatus(
       paths.length + ' strokes  (blob=' + blobPaths.length +
         ', ground=' + groundPaths.length + ', sky=' + skyPaths.length + ')\n' +
       'buffer ' + Math.round(t1 - t0) + 'ms · blob ' + Math.round(t2 - t1) +
         'ms · gnd+sky ' + Math.round(t3 - t2) + 'ms · opt ' + Math.round(t4 - t3) + 'ms\n' +
-      'lw=' + state.lw + 'mm  spacing=' + (state.lw * state.density).toFixed(2) + 'mm  ' +
-      'horizon sy=' + cam.syHorizon.toFixed(2) + '\n' +
+      'lw=' + state.lw + 'mm  spacing=' + spacing.toFixed(2) + 'mm  ' +
+      'horizon sy=' + cam.syHorizon.toFixed(2) + ratioWarn + '\n' +
       state.nBlobs + ' blob' + (state.nBlobs > 1 ? 's' : '') +
         '  scale=' + layout.scale.toFixed(2)
     );
