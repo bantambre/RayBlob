@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RayBlob — 4×5" Hatched Blob</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px; font: 13px/1.45 system-ui, sans-serif;
+         background: #1c1c1c; color: #ddd; }
+  .layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  .panel { display: flex; flex-direction: column; gap: 10px;
+           min-width: 280px; padding: 18px;
+           background: #262626; border-radius: 8px; }
+  .panel h2 { margin: 6px 0 2px; font-size: 11px; font-weight: 600;
+              letter-spacing: 0.08em; text-transform: uppercase; color: #999; }
+  .field { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .field label { color: #aaa; }
+  .field input { width: 120px; padding: 5px 8px; background: #1a1a1a;
+                 color: #eee; border: 1px solid #3a3a3a; border-radius: 4px;
+                 font: inherit; text-align: right; }
+  .field input[type="text"] { text-align: left; }
+  .row { display: flex; gap: 8px; }
+  button { padding: 9px 14px; background: #3a78d8; color: white;
+           border: none; border-radius: 4px; cursor: pointer; font: inherit; flex: 1; }
+  button:hover { background: #4a88e8; }
+  button.secondary { background: #444; }
+  button.secondary:hover { background: #555; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .stats { padding-top: 10px; margin-top: 6px; border-top: 1px solid #3a3a3a;
+           color: #888; font-size: 11px; line-height: 1.6;
+           font-family: ui-monospace, monospace; white-space: pre-wrap;
+           min-height: 32px; }
+  .stage { background: white; border-radius: 6px;
+           box-shadow: 0 6px 24px rgba(0,0,0,0.4); }
+  #preview { display: block; }
+  a.url-link { color: #6aa8ff; font-family: ui-monospace, monospace;
+               font-size: 10px; word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="panel">
+    <h2>Composition</h2>
+    <div class="field"><label>Seed</label><input id="seed" type="text" value="42"></div>
+    <div class="field"><label>Orientation</label>
+      <select id="orientation"
+              style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
+        <option value="portrait">Portrait 4×5</option>
+        <option value="landscape">Landscape 5×4</option>
+      </select>
+    </div>
+    <div class="field"><label># Blobs</label><input id="nBlobs" type="number" min="1" max="2" value="1"></div>
+    <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="2" max="8" value="4"></div>
+    <div class="field"><label>Spread</label><input id="spread" type="number" min="0.2" max="3.0" step="0.1" value="1.0"></div>
+    <div class="field"><label>Smoothing k</label><input id="smoothK" type="number" min="0.05" max="0.8" step="0.05" value="0.3"></div>
+    <div class="field"><label>Cam tilt (°)</label><input id="camTilt" type="number" min="-20" max="20" step="0.5" value="6"></div>
+
+    <h2>Hatching (Pasma)</h2>
+    <div class="field"><label>lw (mm)</label><input id="lw" type="number" min="0.1" max="1.0" step="0.05" value="0.3"></div>
+    <div class="field"><label>Density ×lw</label><input id="density" type="number" min="1.5" max="6" step="0.25" value="2.5"></div>
+    <div class="field"><label>Buffer res</label><input id="bufRes" type="number" min="200" max="800" step="50" value="450"></div>
+
+    <h2>Light</h2>
+    <div class="field"><label>Light X</label><input id="lx" type="number" step="0.1" value="-0.6"></div>
+    <div class="field"><label>Light Y</label><input id="ly" type="number" step="0.1" value="0.8"></div>
+    <div class="field"><label>Light Z</label><input id="lz" type="number" step="0.1" value="-0.4"></div>
+
+    <div class="row" style="margin-top:10px">
+      <button id="render">Render</button>
+      <button id="randomize" class="secondary">Random</button>
+      <button id="save" class="secondary">Save SVG</button>
+    </div>
+
+    <div class="stats" id="stats">Ready.</div>
+    <a class="url-link" id="permalink" href="#">permalink</a>
+  </div>
+
+  <div class="stage">
+    <svg id="preview" width="480" height="600" viewBox="0 0 1200 1500"
+         xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ============================================================
+// Constants & coordinate system
+// ============================================================
+// Orientation-dependent — mutated by setOrientation() at the start of each render.
+// Default = portrait 4×5.
+let W_IN = 4, H_IN = 5;
+let VB_W = 1200, VB_H = 1500;
+let SX_MIN = -1, SX_MAX = 1;
+let SY_MIN = -1.25, SY_MAX = 1.25;
+const MARGIN_VB = 60;   // viewBox units of inner margin (0.2in)
+const GROUND_Y = -0.7;
+// 1 sx-unit always = 2 inches (= 50.8 mm) in both orientations, so this is
+// orientation-independent: world units per millimetre.
+const WORLD_PER_MM = 0.5 / 25.4;
+
+function setOrientation(landscape) {
+  if (landscape) {
+    W_IN = 5; H_IN = 4;
+    VB_W = 1500; VB_H = 1200;
+    SX_MIN = -1.25; SX_MAX = 1.25;
+    SY_MIN = -1;    SY_MAX = 1;
+  } else {
+    W_IN = 4; H_IN = 5;
+    VB_W = 1200; VB_H = 1500;
+    SX_MIN = -1;    SX_MAX = 1;
+    SY_MIN = -1.25; SY_MAX = 1.25;
+  }
+}
+
+// ============================================================
+// PRNG (mulberry32) + string hash
+// ============================================================
+function hashSeed(s) {
+  s = String(s);
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+function makeRng(seed) {
+  let s = hashSeed(seed);
+  return function () {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ============================================================
+// SDF primitives
+// ============================================================
+function sphereSDF(x, y, z, c, r) {
+  const dx = x - c[0], dy = y - c[1], dz = z - c[2];
+  return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+}
+function smin(a, b, k) {
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.min(a, b) - h * h * k * 0.25;
+}
+
+function makeBlobSDF(rng, nSpheres, smoothK, blobCenter, spread, scale) {
+  // `spread`: how far lobe-spheres sit from the anchor (1 = default).
+  // `scale` : overall size multiplier on radii AND offsets (1 = default).
+  if (!scale && scale !== 0) scale = 1;
+  const spheres = [];
+  spheres.push({ c: blobCenter.slice(), r: (0.42 + rng() * 0.14) * scale });
+  for (let i = 1; i < nSpheres; i++) {
+    spheres.push({
+      c: [
+        blobCenter[0] + (rng() - 0.5) * 0.65 * spread * scale,
+        blobCenter[1] + (rng() - 0.5) * 0.55 * spread * scale,
+        blobCenter[2] + (rng() - 0.5) * 0.50 * spread * scale
+      ],
+      r: (0.22 + rng() * 0.26) * scale
+    });
+  }
+  const k = smoothK * scale;
+  return function (x, y, z) {
+    let d = sphereSDF(x, y, z, spheres[0].c, spheres[0].r);
+    for (let i = 1; i < spheres.length; i++) {
+      d = smin(d, sphereSDF(x, y, z, spheres[i].c, spheres[i].r), k);
+    }
+    return d;
+  };
+}
+
+// ============================================================
+// Camera (perspective with optional pitch/tilt)
+//   tiltDeg > 0  ⇒ camera looks UP, horizon falls to LOWER part of screen
+// ============================================================
+function makeCamera(tiltDeg) {
+  const t = tiltDeg * Math.PI / 180;
+  const F = [0, Math.sin(t), Math.cos(t)];     // forward
+  const R = [1, 0, 0];                          // right
+  // up = F × R  (right-handed, world +y up)
+  const U = [
+    F[1] * R[2] - F[2] * R[1],
+    F[2] * R[0] - F[0] * R[2],
+    F[0] * R[1] - F[1] * R[0]
+  ];
+  const focal = 4;
+  // Horizon in screen: where the ray has dy = 0.
+  // dy = F[1]*focal + U[1]*sy = 0 → sy = -F[1]*focal / U[1]
+  const syHorizon = -F[1] * focal / U[1];
+  return { pos: [0, 0, -5], F, R, U, focal, syHorizon };
+}
+
+// World-y of the blob anchor such that worldToScreen([0, y, 0]) = (0, 0).
+// From U·D = 0 with D = ([0,y,0] - cam.pos):
+//   U[1]·(y - cam.pos[1]) + U[2]·(0 - cam.pos[2]) = 0
+function blobAnchorY(cam) {
+  return cam.pos[1] - cam.U[2] * (0 - cam.pos[2]) / cam.U[1];
+}
+
+// Decide blob centers + size scale.
+// For nBlobs=2: place at (±X, anchorY, 0) so the blobs are nearly touching
+// AND fit within the visible image area at the blob's depth (z=0).
+function computeBlobLayout(state, cam) {
+  const anchorY = blobAnchorY(cam);
+  if (state.nBlobs === 1) {
+    return { centers: [[0, anchorY, 0]], scale: 1.0 };
+  }
+  // For a world point (X, anchorY, 0):
+  //   F·D = F[1]*anchorY + F[2]*(-cam.pos[2])
+  //   sx_screen = focal * X / (F·D)
+  // Solve sx_screen = SX_MAX for X (world x at the right edge of the visible area
+  // at the blob's depth):
+  const FdotD = cam.F[1] * anchorY + cam.F[2] * (-cam.pos[2]);
+  const visibleX = SX_MAX * FdotD / cam.focal;
+
+  // Joint constraints (with `rEff` = blob's effective radius in world):
+  //   X + rEff ≤ visibleX - margin     ← stay on the page
+  //   X ≥ rEff + gap/2                  ← nearly touching, with small gap
+  // Tightest case (both equalities):
+  //   rEff = (visibleX - margin - gap/2) / 2
+  //   X    = rEff + gap/2
+  const margin = 0.08;
+  const gap = 0.06;
+  const rEff = Math.max(0.1, (visibleX - margin - gap / 2) / 2);
+  const X = rEff + gap / 2;
+
+  // Map effective radius to a `scale` for the blob. rEffBase is a rough estimate
+  // of the unit-scale blob's outer extent.
+  const rEffBase = 0.325 * state.spread + 0.48 + 0.06 * state.smoothK;
+  const scale = Math.min(1.0, rEff / rEffBase);
+  return { centers: [[-X, anchorY, 0], [X, anchorY, 0]], scale };
+}
+
+// Build the full scene SDF for one or two blobs.
+function buildSceneSDF(state, cam, rng) {
+  const layout = computeBlobLayout(state, cam);
+  const sdfs = layout.centers.map(c =>
+    makeBlobSDF(rng, state.nSpheres, state.smoothK, c, state.spread, layout.scale));
+  if (sdfs.length === 1) return { sdf: sdfs[0], layout };
+  return {
+    sdf: function (x, y, z) {
+      let d = sdfs[0](x, y, z);
+      for (let i = 1; i < sdfs.length; i++) {
+        const d2 = sdfs[i](x, y, z);
+        if (d2 < d) d = d2;
+      }
+      return d;
+    },
+    layout
+  };
+}
+
+function castRay(sx, sy, cam) {
+  const dx = cam.F[0] * cam.focal + cam.R[0] * sx + cam.U[0] * sy;
+  const dy = cam.F[1] * cam.focal + cam.R[1] * sx + cam.U[1] * sy;
+  const dz = cam.F[2] * cam.focal + cam.R[2] * sx + cam.U[2] * sy;
+  const len = Math.hypot(dx, dy, dz);
+  return [dx / len, dy / len, dz / len];
+}
+
+function worldToScreen(P, cam) {
+  const dx = P[0] - cam.pos[0], dy = P[1] - cam.pos[1], dz = P[2] - cam.pos[2];
+  const fDotD = cam.F[0] * dx + cam.F[1] * dy + cam.F[2] * dz;
+  if (fDotD <= 1e-6) return null; // behind camera
+  const s = cam.focal / fDotD;
+  return [
+    s * (cam.R[0] * dx + cam.R[1] * dy + cam.R[2] * dz),
+    s * (cam.U[0] * dx + cam.U[1] * dy + cam.U[2] * dz)
+  ];
+}
+
+// ============================================================
+// Raymarcher
+// ============================================================
+function rayMarch(sdf, ox, oy, oz, dx, dy, dz, tMax) {
+  let t = 0;
+  for (let i = 0; i < 96; i++) {
+    const d = sdf(ox + dx * t, oy + dy * t, oz + dz * t);
+    if (d < 0.0008) return t;
+    t += Math.max(d, 0.004);
+    if (t > tMax) return -1;
+  }
+  return -1;
+}
+function normalAt(sdf, x, y, z) {
+  const e = 0.0009;
+  const nx = sdf(x + e, y, z) - sdf(x - e, y, z);
+  const ny = sdf(x, y + e, z) - sdf(x, y - e, z);
+  const nz = sdf(x, y, z + e) - sdf(x, y, z - e);
+  const l = Math.hypot(nx, ny, nz) || 1;
+  return [nx / l, ny / l, nz / l];
+}
+
+// ============================================================
+// Scene buffer (depth, normal, lighting, surface)
+//   surface: 0 = sky, 1 = blob, 2 = ground
+// ============================================================
+function renderSceneBuffer(state, sdf, cam) {
+  const W = state.bufRes;
+  const H = Math.round(W * (SY_MAX - SY_MIN) / (SX_MAX - SX_MIN));
+  const N = W * H;
+  const buf = {
+    W, H,
+    surface: new Uint8Array(N),
+    nx: new Float32Array(N), ny: new Float32Array(N), nz: new Float32Array(N),
+    light: new Float32Array(N),
+    depth: new Float32Array(N)
+  };
+
+  let lL = Math.hypot(state.lx, state.ly, state.lz) || 1;
+  const L = [state.lx / lL, state.ly / lL, state.lz / lL];
+
+  for (let py = 0; py < H; py++) {
+    const sy = SY_MAX - (py / (H - 1)) * (SY_MAX - SY_MIN);
+    for (let px = 0; px < W; px++) {
+      const sx = SX_MIN + (px / (W - 1)) * (SX_MAX - SX_MIN);
+      const idx = py * W + px;
+      const [dx, dy, dz] = castRay(sx, sy, cam);
+
+      let tG = -1;
+      if (dy < -1e-5) {
+        const t = (GROUND_Y - cam.pos[1]) / dy;
+        if (t > 0) tG = t;
+      }
+      const tB = rayMarch(sdf, cam.pos[0], cam.pos[1], cam.pos[2], dx, dy, dz, 30);
+
+      let hit = 0, t = -1, n = null;
+      if (tB > 0 && (tG < 0 || tB < tG)) {
+        hit = 1; t = tB;
+        n = normalAt(sdf,
+          cam.pos[0] + dx * tB, cam.pos[1] + dy * tB, cam.pos[2] + dz * tB);
+      } else if (tG > 0) {
+        hit = 2; t = tG; n = [0, 1, 0];
+      }
+
+      if (hit === 0) { buf.surface[idx] = 0; continue; }
+      buf.surface[idx] = hit;
+      buf.nx[idx] = n[0]; buf.ny[idx] = n[1]; buf.nz[idx] = n[2];
+      buf.depth[idx] = t;
+      const ld = Math.max(0, n[0] * L[0] + n[1] * L[1] + n[2] * L[2]);
+      buf.light[idx] = 0.18 + 0.82 * ld;
+    }
+  }
+  return buf;
+}
+
+function bufIdx(buf, sx, sy) {
+  const px = Math.round((sx - SX_MIN) / (SX_MAX - SX_MIN) * (buf.W - 1));
+  const py = Math.round((SY_MAX - sy) / (SY_MAX - SY_MIN) * (buf.H - 1));
+  if (px < 0 || px >= buf.W || py < 0 || py >= buf.H) return -1;
+  return py * buf.W + px;
+}
+
+// ============================================================
+// Curved blob hatches via tangent-field streamlines
+// ----
+// At each surface point with normal N and (normalized) light L,
+//   T_primary = normalize(N × L)        — perpendicular to lighting gradient
+//   T_cross   = normalize(N × T_primary) — orthogonal in tangent plane
+// Project to screen and step. The screen-space projection of T changes as
+// N varies along the surface ⇒ the path curves.
+// A claim-map (Jobard-Lefer style) prevents adjacent streamlines from merging.
+// ============================================================
+function markClaim(claim, W, H, px, py, r) {
+  const r2 = r * r;
+  const x0 = Math.max(0, px - r), x1 = Math.min(W - 1, px + r);
+  const y0 = Math.max(0, py - r), y1 = Math.min(H - 1, py + r);
+  for (let y = y0; y <= y1; y++) {
+    const dy = y - py;
+    const row = y * W;
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - px;
+      if (dx * dx + dy * dy <= r2) claim[row + x] = 1;
+    }
+  }
+}
+
+function traceTangent(sx0, sy0, dirSign, buf, cam, L, claim, stepScreen, useCross) {
+  // Trace ONLY — does not mutate `claim`. The caller marks the path after
+  // it finishes so the tracer never terminates on its own claim trail.
+  const points = [];
+  let sx = sx0, sy = sy0;
+  let prevX = null, prevY = null;
+
+  for (let step = 0; step < 400; step++) {
+    const idx = bufIdx(buf, sx, sy);
+    if (idx < 0) break;
+    if (buf.surface[idx] !== 1) break;
+    if (step > 0 && claim[idx]) break;     // ran into another streamline
+
+    const nx = buf.nx[idx], ny = buf.ny[idx], nz = buf.nz[idx];
+
+    // primary = N × L
+    const px3 = ny * L[2] - nz * L[1];
+    const py3 = nz * L[0] - nx * L[2];
+    const pz3 = nx * L[1] - ny * L[0];
+    let tx, ty, tz;
+    if (!useCross) {
+      tx = px3; ty = py3; tz = pz3;
+    } else {
+      // cross = N × primary
+      tx = ny * pz3 - nz * py3;
+      ty = nz * px3 - nx * pz3;
+      tz = nx * py3 - ny * px3;
+    }
+    const tlen = Math.hypot(tx, ty, tz);
+    if (tlen < 1e-3) break;                // degenerate (highlight / antipode)
+    tx /= tlen; ty /= tlen; tz /= tlen;
+
+    // Project tangent to screen via R, U.
+    const dsx = cam.R[0] * tx + cam.R[1] * ty + cam.R[2] * tz;
+    const dsy = cam.U[0] * tx + cam.U[1] * ty + cam.U[2] * tz;
+    const dmag = Math.hypot(dsx, dsy);
+    if (dmag < 1e-3) break;                // tangent edge-on ⇒ silhouette
+    let dirx = dsx / dmag, diry = dsy / dmag;
+
+    if (prevX !== null && (dirx * prevX + diry * prevY) < 0) {
+      dirx = -dirx; diry = -diry;
+    }
+    prevX = dirx; prevY = diry;
+
+    const nsx = sx + dirx * stepScreen * dirSign;
+    const nsy = sy + diry * stepScreen * dirSign;
+    if (nsx < SX_MIN || nsx > SX_MAX || nsy < SY_MIN || nsy > SY_MAX) break;
+
+    points.push([nsx, nsy]);
+    sx = nsx; sy = nsy;
+  }
+  return points;
+}
+
+// Rasterize a finished streamline into the claim map with stripe radius.
+function claimPath(path, buf, claim, claimR) {
+  const W = buf.W, H = buf.H;
+  for (let i = 0; i < path.length; i++) {
+    const idx = bufIdx(buf, path[i][0], path[i][1]);
+    if (idx < 0) continue;
+    const px = idx % W, py = (idx - px) / W;
+    markClaim(claim, W, H, px, py, claimR);
+  }
+}
+
+function generateBlobHatches(state, buf, cam) {
+  const paths = [];
+  const W = buf.W, H = buf.H;
+
+  let lL = Math.hypot(state.lx, state.ly, state.lz) || 1;
+  const L = [state.lx / lL, state.ly / lL, state.lz / lL];
+
+  const spacingWorld = state.lw * state.density * WORLD_PER_MM;
+  const pixPerWorld = (W - 1) / (SX_MAX - SX_MIN);
+  const claimR = Math.max(1, Math.round(spacingWorld * pixPerWorld * 0.42));
+  const stepScreen = Math.max(0.0015, spacingWorld * 0.4);
+
+  // ---- Primary pass: contour-following hatches across the whole blob ----
+  const seedSpacing = spacingWorld * 0.7;
+  const jit = makeRng(state.seed + ':seedJitter');
+
+  const claim = new Uint8Array(W * H);
+  for (let sy = SY_MAX; sy > SY_MIN; sy -= seedSpacing) {
+    for (let sx = SX_MIN; sx < SX_MAX; sx += seedSpacing) {
+      const jx = (jit() - 0.5) * seedSpacing * 0.5;
+      const jy = (jit() - 0.5) * seedSpacing * 0.5;
+      const ssx = sx + jx, ssy = sy + jy;
+      if (ssx < SX_MIN || ssx > SX_MAX || ssy < SY_MIN || ssy > SY_MAX) continue;
+      const sIdx = bufIdx(buf, ssx, ssy);
+      if (sIdx < 0 || buf.surface[sIdx] !== 1 || claim[sIdx]) continue;
+
+      const fwd = traceTangent(ssx, ssy, +1, buf, cam, L, claim, stepScreen, false);
+      const bwd = traceTangent(ssx, ssy, -1, buf, cam, L, claim, stepScreen, false);
+      const path = [...bwd.reverse(), [ssx, ssy], ...fwd];
+      if (path.length >= 3) {
+        paths.push(path);
+        claimPath(path, buf, claim, claimR);
+      }
+    }
+  }
+
+  // ---- Cross pass: orthogonal hatching in shadow regions ----
+  const claimC = new Uint8Array(W * H);
+  const jit2 = makeRng(state.seed + ':seedCross');
+  const shadowThreshold = 0.5;
+  const seedSpacingC = spacingWorld * 0.85;
+  for (let sy = SY_MAX; sy > SY_MIN; sy -= seedSpacingC) {
+    for (let sx = SX_MIN; sx < SX_MAX; sx += seedSpacingC) {
+      const jx = (jit2() - 0.5) * seedSpacingC * 0.5;
+      const jy = (jit2() - 0.5) * seedSpacingC * 0.5;
+      const ssx = sx + jx, ssy = sy + jy;
+      if (ssx < SX_MIN || ssx > SX_MAX || ssy < SY_MIN || ssy > SY_MAX) continue;
+      const sIdx = bufIdx(buf, ssx, ssy);
+      if (sIdx < 0 || buf.surface[sIdx] !== 1 || claimC[sIdx]) continue;
+      if (buf.light[sIdx] > shadowThreshold) continue;
+
+      const fwd = traceTangent(ssx, ssy, +1, buf, cam, L, claimC, stepScreen, true);
+      const bwd = traceTangent(ssx, ssy, -1, buf, cam, L, claimC, stepScreen, true);
+      const path = [...bwd.reverse(), [ssx, ssy], ...fwd];
+      if (path.length >= 3) {
+        paths.push(path);
+        claimPath(path, buf, claimC, claimR);
+      }
+    }
+  }
+
+  return paths;
+}
+
+// ============================================================
+// Ground hatches: horizontal scan-lines clipped to ground pixels
+// ============================================================
+function generateGroundHatches(state, buf) {
+  const paths = [];
+  const spacingWorld = state.lw * state.density * WORLD_PER_MM;
+  const sampleStep = Math.max(0.002, spacingWorld * 0.3);
+
+  for (let sy = SY_MIN; sy <= SY_MAX; sy += spacingWorld) {
+    let inDraw = false;
+    let x0 = 0, lastX = 0;
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      const idx = bufIdx(buf, sx, sy);
+      const draw = (idx >= 0 && buf.surface[idx] === 2);
+      if (draw) {
+        if (!inDraw) { x0 = sx; inDraw = true; }
+        lastX = sx;
+      } else if (inDraw) {
+        if (lastX - x0 > spacingWorld * 0.3) paths.push([[x0, sy], [lastX, sy]]);
+        inDraw = false;
+      }
+    }
+    if (inDraw && lastX - x0 > spacingWorld * 0.3) paths.push([[x0, sy], [lastX, sy]]);
+  }
+  return paths;
+}
+
+// ============================================================
+// Sky hatches: 45° scan-lines, dashed with fade-to-top
+// ============================================================
+function generateSkyHatches(state, buf, syHorizon) {
+  const paths = [];
+  if (syHorizon >= SY_MAX - 0.05) return paths;
+
+  const ang = Math.PI / 4;
+  const ca = Math.cos(ang), sa = Math.sin(ang);
+
+  const spacingWorld = state.lw * state.density * WORLD_PER_MM * 1.3;
+  const sampleStep = Math.max(0.0015, spacingWorld * 0.22);
+  const cycleLen = spacingWorld * 1.4;
+  const RANGE = 1.85;
+  const maxSky = SY_MAX - syHorizon;
+
+  for (let s = -RANGE; s <= RANGE; s += spacingWorld) {
+    const sx0 = -sa * s;
+    const sy0 = ca * s;
+    let inDraw = false;
+    let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+
+    for (let t = -RANGE; t <= RANGE; t += sampleStep) {
+      const sx = sx0 + ca * t;
+      const sy = sy0 + sa * t;
+      let draw = false;
+      if (sx >= SX_MIN && sx <= SX_MAX && sy >= SY_MIN && sy <= SY_MAX && sy > syHorizon) {
+        const idx = bufIdx(buf, sx, sy);
+        if (idx >= 0 && buf.surface[idx] === 0) {
+          const above = (sy - syHorizon) / maxSky;
+          const fade = 1 - above;
+          const onFrac = fade * fade;       // squared falloff for nicer feel
+          const cyc = (t / cycleLen) - Math.floor(t / cycleLen);
+          draw = cyc < onFrac;
+        }
+      }
+      if (draw) {
+        if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+        lastX = sx; lastY = sy;
+      } else if (inDraw) {
+        if (Math.hypot(lastX - dx0, lastY - dy0) > spacingWorld * 0.3) {
+          paths.push([[dx0, dy0], [lastX, lastY]]);
+        }
+        inDraw = false;
+      }
+    }
+    if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > spacingWorld * 0.3) {
+      paths.push([[dx0, dy0], [lastX, lastY]]);
+    }
+  }
+  return paths;
+}
+
+// ============================================================
+// Horizon line, broken where the blob occludes it
+// ============================================================
+function addHorizonLine(paths, buf, syHorizon) {
+  if (syHorizon < SY_MIN + 0.02 || syHorizon > SY_MAX - 0.02) return;
+  const sampleStep = 0.0025;
+  let inDraw = false, x0 = 0, lastX = 0;
+  for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+    const idx = bufIdx(buf, sx, syHorizon);
+    const occluded = (idx >= 0 && buf.surface[idx] === 1);
+    if (!occluded) {
+      if (!inDraw) { x0 = sx; inDraw = true; }
+      lastX = sx;
+    } else if (inDraw) {
+      paths.push([[x0, syHorizon], [lastX, syHorizon]]);
+      inDraw = false;
+    }
+  }
+  if (inDraw) paths.push([[x0, syHorizon], [lastX, syHorizon]]);
+}
+
+// ============================================================
+// Pen-up travel optimization (greedy nearest-neighbor + reversal)
+// ============================================================
+function optimizePaths(paths) {
+  const n = paths.length;
+  if (n === 0) return paths;
+  const used = new Uint8Array(n);
+  const out = [];
+  let cx = -1, cy = 1.25;
+  for (let count = 0; count < n; count++) {
+    let best = -1, bestD = Infinity, bestRev = false;
+    for (let i = 0; i < n; i++) {
+      if (used[i]) continue;
+      const p = paths[i];
+      const a = p[0], b = p[p.length - 1];
+      const dA = (a[0] - cx) * (a[0] - cx) + (a[1] - cy) * (a[1] - cy);
+      const dB = (b[0] - cx) * (b[0] - cx) + (b[1] - cy) * (b[1] - cy);
+      if (dA < bestD) { bestD = dA; best = i; bestRev = false; }
+      if (dB < bestD) { bestD = dB; best = i; bestRev = true; }
+    }
+    used[best] = 1;
+    const p = paths[best];
+    const ordered = bestRev ? p.slice().reverse() : p;
+    out.push(ordered);
+    cx = ordered[ordered.length - 1][0];
+    cy = ordered[ordered.length - 1][1];
+  }
+  return out;
+}
+
+// ============================================================
+// SVG output
+// ============================================================
+function sxToVB(sx) {
+  return MARGIN_VB + (sx - SX_MIN) / (SX_MAX - SX_MIN) * (VB_W - 2 * MARGIN_VB);
+}
+function syToVB(sy) {
+  return MARGIN_VB + (SY_MAX - sy) / (SY_MAX - SY_MIN) * (VB_H - 2 * MARGIN_VB);
+}
+function buildPathD(paths) {
+  let d = '';
+  for (const p of paths) {
+    if (p.length < 2) continue;
+    d += 'M' + sxToVB(p[0][0]).toFixed(2) + ',' + syToVB(p[0][1]).toFixed(2);
+    for (let i = 1; i < p.length; i++) {
+      d += 'L' + sxToVB(p[i][0]).toFixed(2) + ',' + syToVB(p[i][1]).toFixed(2);
+    }
+  }
+  return d;
+}
+function lwToStrokeVB(lwMM) { return lwMM * (300 / 25.4); }
+
+// ============================================================
+// State + UI glue
+// ============================================================
+function readState() {
+  return {
+    seed: document.getElementById('seed').value || '0',
+    orientation: document.getElementById('orientation').value === 'landscape'
+      ? 'landscape' : 'portrait',
+    nBlobs: clampInt(document.getElementById('nBlobs').value, 1, 2, 1),
+    nSpheres: clampInt(document.getElementById('nSpheres').value, 2, 8, 4),
+    spread: clampFloat(document.getElementById('spread').value, 0.2, 3.0, 1.0),
+    smoothK: clampFloat(document.getElementById('smoothK').value, 0.05, 0.8, 0.3),
+    camTilt: clampFloat(document.getElementById('camTilt').value, -20, 20, 6),
+    lw: clampFloat(document.getElementById('lw').value, 0.05, 2.0, 0.3),
+    density: clampFloat(document.getElementById('density').value, 1.2, 8, 2.5),
+    bufRes: clampInt(document.getElementById('bufRes').value, 200, 800, 450),
+    lx: clampFloat(document.getElementById('lx').value, -2, 2, -0.6),
+    ly: clampFloat(document.getElementById('ly').value, -2, 2, 0.8),
+    lz: clampFloat(document.getElementById('lz').value, -2, 2, -0.4),
+  };
+}
+function clampInt(v, lo, hi, fb) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fb;
+}
+function clampFloat(v, lo, hi, fb) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fb;
+}
+function setStatus(msg) { document.getElementById('stats').textContent = msg; }
+function tick() { return new Promise(r => setTimeout(r, 0)); }
+
+function syncFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const keys = ['seed','orientation','nBlobs','lw','density','nSpheres','spread',
+                'smoothK','camTilt','bufRes','lx','ly','lz'];
+  for (const k of keys) {
+    if (params.has(k)) document.getElementById(k).value = params.get(k);
+  }
+}
+function writeUrl(state) {
+  const params = new URLSearchParams();
+  for (const k of ['seed','orientation','nBlobs','lw','density','nSpheres',
+                   'spread','smoothK','camTilt']) {
+    params.set(k, state[k]);
+  }
+  const url = window.location.pathname + '?' + params.toString();
+  window.history.replaceState({}, '', url);
+  const link = document.getElementById('permalink');
+  link.href = url;
+  link.textContent = '?' + params.toString();
+}
+
+let lastRender = null;
+
+async function doRender() {
+  const btn = document.getElementById('render');
+  btn.disabled = true;
+  try {
+    const state = readState();
+    writeUrl(state);
+
+    setStatus('Building scene…');
+    await tick();
+    setOrientation(state.orientation === 'landscape');
+    const cam = makeCamera(state.camTilt);
+    const rng = makeRng(state.seed);
+    const { sdf, layout } = buildSceneSDF(state, cam, rng);
+
+    setStatus('Raymarching scene buffer…');
+    await tick();
+    const t0 = performance.now();
+    const buf = renderSceneBuffer(state, sdf, cam);
+    const t1 = performance.now();
+
+    setStatus('Tracing curved blob hatches…');
+    await tick();
+    const blobPaths = generateBlobHatches(state, buf, cam);
+    const t2 = performance.now();
+
+    setStatus('Ground + sky hatches…');
+    await tick();
+    const groundPaths = generateGroundHatches(state, buf);
+    const skyPaths = generateSkyHatches(state, buf, cam.syHorizon);
+    const t3 = performance.now();
+
+    const all = blobPaths.concat(groundPaths).concat(skyPaths);
+    addHorizonLine(all, buf, cam.syHorizon);
+
+    setStatus('Optimizing pen travel…');
+    await tick();
+    const paths = optimizePaths(all);
+    const t4 = performance.now();
+
+    const d = buildPathD(paths);
+    const strokeVB = lwToStrokeVB(state.lw);
+
+    const svg = document.getElementById('preview');
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    // Preview size: scale so the longer side ≈ 600px on screen.
+    const previewLong = 600;
+    if (state.orientation === 'landscape') {
+      svg.style.width = previewLong + 'px';
+      svg.style.height = (previewLong * H_IN / W_IN) + 'px';
+    } else {
+      svg.style.width = (previewLong * W_IN / H_IN) + 'px';
+      svg.style.height = previewLong + 'px';
+    }
+    svg.innerHTML =
+      '<rect width="' + VB_W + '" height="' + VB_H + '" fill="white"/>' +
+      '<path d="' + d + '" stroke="black" stroke-width="' + strokeVB.toFixed(3) +
+      '" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
+
+    // Snapshot all dims so doSave produces correct output even if user
+    // changes the UI before exporting.
+    lastRender = {
+      state, paths, d, strokeVB,
+      W_IN, H_IN, VB_W, VB_H
+    };
+
+    setStatus(
+      paths.length + ' strokes  (blob=' + blobPaths.length +
+        ', ground=' + groundPaths.length + ', sky=' + skyPaths.length + ')\n' +
+      'buffer ' + Math.round(t1 - t0) + 'ms · blob ' + Math.round(t2 - t1) +
+        'ms · gnd+sky ' + Math.round(t3 - t2) + 'ms · opt ' + Math.round(t4 - t3) + 'ms\n' +
+      'lw=' + state.lw + 'mm  spacing=' + (state.lw * state.density).toFixed(2) + 'mm  ' +
+      'horizon sy=' + cam.syHorizon.toFixed(2) + '\n' +
+      state.nBlobs + ' blob' + (state.nBlobs > 1 ? 's' : '') +
+        '  scale=' + layout.scale.toFixed(2)
+    );
+  } catch (err) {
+    setStatus('Error: ' + err.message);
+    console.error(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function doSave() {
+  if (!lastRender) { setStatus('Nothing to save yet — render first.'); return; }
+  const { state, d, strokeVB } = lastRender;
+  const wIn = lastRender.W_IN, hIn = lastRender.H_IN;
+  const vbW = lastRender.VB_W, vbH = lastRender.VB_H;
+  const svgText =
+    '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<svg xmlns="http://www.w3.org/2000/svg" ' +
+    'width="' + wIn + 'in" height="' + hIn + 'in" ' +
+    'viewBox="0 0 ' + vbW + ' ' + vbH + '">\n' +
+    '  <path d="' + d + '" stroke="black" stroke-width="' + strokeVB.toFixed(3) +
+    '" fill="none" stroke-linecap="round" stroke-linejoin="round"/>\n' +
+    '</svg>\n';
+  const blob = new Blob([svgText], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'rayblob_' + state.orientation + '_seed-' + state.seed +
+    '_lw-' + state.lw + '.svg';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function doRandomize() {
+  document.getElementById('seed').value = Math.floor(Math.random() * 1e9).toString(36);
+  doRender();
+}
+
+document.getElementById('render').addEventListener('click', doRender);
+document.getElementById('save').addEventListener('click', doSave);
+document.getElementById('randomize').addEventListener('click', doRandomize);
+document.querySelectorAll('.panel input').forEach(el => {
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
+});
+
+syncFromUrl();
+doRender();
+</script>
+</body>
+</html>
