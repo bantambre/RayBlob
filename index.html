@@ -11,7 +11,7 @@
   .panel { display: flex; flex-direction: column; gap: 10px;
            min-width: 280px; padding: 18px;
            background: #262626; border-radius: 8px; }
-  .panel h2 { margin: 6px 0 2px; font-size: 11px; font-weight: 600;
+  .panel h2 { margin: 0 0 4px; font-size: 11px; font-weight: 600;
               letter-spacing: 0.08em; text-transform: uppercase; color: #999; }
   .field { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .field label { color: #aaa; }
@@ -42,47 +42,24 @@
   <div class="panel">
     <h2>Composition</h2>
     <div class="field"><label>Seed</label><input id="seed" type="text" value="42"></div>
-    <div class="field"><label>Orientation</label>
-      <select id="orientation"
+    <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="2" max="8" value="4"></div>
+    <div class="field"><label>Spread</label><input id="spread" type="number" min="0.2" max="3.0" step="0.1" value="1.0"></div>
+    <div class="field"><label>Verticality</label><input id="verticality" type="number" min="0.4" max="3.0" step="0.1" value="1.4"></div>
+    <div class="field"><label>Smoothing k</label><input id="smoothK" type="number" min="0.05" max="0.8" step="0.05" value="0.3"></div>
+    <div class="field"><label>Cam tilt (°)</label><input id="camTilt" type="number" min="0" max="20" step="0.5" value="6"></div>
+    <div class="field"><label>Sky style</label>
+      <select id="skyStyle"
               style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
-        <option value="portrait">Portrait 4×5</option>
-        <option value="landscape">Landscape 5×4</option>
+        <option value="gradient">Gradient</option>
+        <option value="clouds">Wavy clouds</option>
       </select>
     </div>
-    <div class="field"><label># Blobs</label><input id="nBlobs" type="number" min="1" max="2" value="1"></div>
-    <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="2" max="8" value="4"></div>
-    <div class="field"><label>Spread</label><input id="spread" type="number" min="0.2" max="3.0" step="0.1" value="0.6"></div>
-    <div class="field"><label>Smoothing k</label><input id="smoothK" type="number" min="0.05" max="0.8" step="0.05" value="0.4"></div>
-    <div class="field"><label>Cam tilt (°)</label><input id="camTilt" type="number" min="-20" max="20" step="0.5" value="6"></div>
+    <div class="field"><label>Waviness</label><input id="waviness" type="number" min="0" max="8" step="0.25" value="3.0"></div>
 
     <h2>Hatching (Pasma)</h2>
     <div class="field"><label>lw (mm)</label><input id="lw" type="number" min="0.1" max="1.0" step="0.05" value="0.3"></div>
-    <div class="field"><label>Density ×lw</label><input id="density" type="number" min="1.7" max="6" step="0.1" value="2.75"></div>
-    <div class="field"><label>Buffer res</label><input id="bufRes" type="number" min="200" max="800" step="50" value="450"></div>
-
-    <h2>Hatching style</h2>
-    <div class="field"><label>Style</label>
-      <select id="hatchStyle"
-              style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
-        <option value="pasma" selected>Pasma classic</option>
-        <option value="light">Light contours</option>
-        <option value="polar">Polar grid</option>
-        <option value="hybrid">Light + polar</option>
-      </select>
-    </div>
-    <div class="field"><label>Hatch angle (°)</label><input id="hatchAngle" type="number" min="-90" max="90" step="5" value="30"></div>
-    <div class="field"><label>Polar axis</label>
-      <select id="polarAxis"
-              style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
-        <option value="Y" selected>Y (world up)</option>
-        <option value="X">X (world side)</option>
-        <option value="Z">Z (depth)</option>
-        <option value="view">Camera up</option>
-      </select>
-    </div>
-    <div class="field"><label>Polar threshold</label><input id="polarThreshold" type="number" min="0.2" max="1.0" step="0.05" value="0.5"></div>
-    <div class="field"><label>Highlight cutoff</label><input id="highlightCutoff" type="number" min="0.25" max="0.95" step="0.025" value="0.65"></div>
-    <div class="field"><label>Shadow cutoff</label><input id="shadowCutoff" type="number" min="0.2" max="0.7" step="0.025" value="0.5"></div>
+    <div class="field"><label>Density ×lw</label><input id="density" type="number" min="1.5" max="6" step="0.25" value="2.5"></div>
+    <div class="field"><label>Buffer res</label><input id="bufRes" type="number" min="200" max="800" step="50" value="400"></div>
 
     <h2>Light</h2>
     <div class="field"><label>Light X</label><input id="lx" type="number" step="0.1" value="-0.6"></div>
@@ -111,34 +88,49 @@
 // ============================================================
 // Constants & coordinate system
 // ============================================================
-// Orientation-dependent — mutated by setOrientation() at the start of each render.
-// Default = portrait 4×5.
-let W_IN = 4, H_IN = 5;
-let VB_W = 1200, VB_H = 1500;
-let SX_MIN = -1, SX_MAX = 1;
-let SY_MIN = -1.25, SY_MAX = 1.25;
-const MARGIN_VB = 60;   // viewBox units of inner margin (0.2in)
-const GROUND_Y = -0.7;
-// 1 sx-unit always = 2 inches (= 50.8 mm) in both orientations, so this is
-// orientation-independent: world units per millimetre.
-const WORLD_PER_MM = 0.5 / 25.4;
+// SVG output: 4×5 inch portrait, viewBox 1200×1500 (300 units/inch)
+const W_IN = 4, H_IN = 5;
+const VB_W = 1200, VB_H = 1500;
+const MARGIN_VB = 60;
 
-function setOrientation(landscape) {
-  if (landscape) {
-    W_IN = 5; H_IN = 4;
-    VB_W = 1500; VB_H = 1200;
-    SX_MIN = -1.25; SX_MAX = 1.25;
-    SY_MIN = -1;    SY_MAX = 1;
-  } else {
-    W_IN = 4; H_IN = 5;
-    VB_W = 1200; VB_H = 1500;
-    SX_MIN = -1;    SX_MAX = 1;
-    SY_MIN = -1.25; SY_MAX = 1.25;
-  }
+// Screen-space coords. sx ∈ [-1, 1], sy ∈ [-1.25, 1.25] (positive sy = UP).
+const SX_MIN = -1, SX_MAX = 1;
+const SY_MIN = -1.25, SY_MAX = 1.25;
+
+// Camera position is fixed; the *direction* changes with `camTilt`, so the
+// horizon position on screen is configurable. These F/R/U vectors are
+// recomputed at render time by setupCamera().
+const CAM = [0, 0, -5];
+const FOCAL = 4;
+const GROUND_Y = -0.5;
+let camF = [0, 0, 1];
+let camR = [1, 0, 0];
+let camU = [0, 1, 0];
+let syHorizon = 0;
+
+function setupCamera(tiltDeg) {
+  const t = tiltDeg * Math.PI / 180;
+  camF = [0, Math.sin(t), Math.cos(t)];
+  camR = [1, 0, 0];
+  // U = F × R for right-handed +y-up
+  camU = [
+    camF[1] * camR[2] - camF[2] * camR[1],
+    camF[2] * camR[0] - camF[0] * camR[2],
+    camF[0] * camR[1] - camF[1] * camR[0]
+  ];
+  // Horizon on screen: where the world-y component of the ray is zero.
+  syHorizon = -camF[1] * FOCAL / camU[1];
 }
 
+// Hatching: 4 fixed screen-space angles, picked per-pixel from the projected
+// surface normal of the blob.
+const HATCH_ANGLES = [0, Math.PI / 4, Math.PI / 2, 3 * Math.PI / 4];
+
+// 1 sx-unit = 2 inches = 50.8mm  ⇒  WORLD_PER_MM = 0.5 / 25.4
+const WORLD_PER_MM = 2.0 / (W_IN * 25.4);
+
 // ============================================================
-// PRNG (mulberry32) + string hash
+// PRNG
 // ============================================================
 function hashSeed(s) {
   s = String(s);
@@ -161,7 +153,7 @@ function makeRng(seed) {
 }
 
 // ============================================================
-// SDF primitives
+// SDF
 // ============================================================
 function sphereSDF(x, y, z, c, r) {
   const dx = x - c[0], dy = y - c[1], dz = z - c[2];
@@ -171,136 +163,59 @@ function smin(a, b, k) {
   const h = Math.max(k - Math.abs(a - b), 0) / k;
   return Math.min(a, b) - h * h * k * 0.25;
 }
-
-function makeBlobSDF(rng, nSpheres, smoothK, blobCenter, spread, scale) {
-  // `spread`: how far lobe-spheres sit from the anchor (1 = default).
-  // `scale` : overall size multiplier on radii AND offsets (1 = default).
-  if (!scale && scale !== 0) scale = 1;
+function makeBlobSDF(rng, nSpheres, smoothK, spread, verticality) {
+  // `spread`       — horizontal/radial offset multiplier on lobes
+  // `verticality`  — stretches lobe placement AND each sphere's apparent
+  //                  reach in world-y, producing a vertically elongated blob.
+  if (!spread && spread !== 0) spread = 1;
+  if (!verticality && verticality !== 0) verticality = 1;
+  const V = verticality;
+  // Slightly negative anchor — with a 6° camera tilt the new horizon falls
+  // to sy ≈ -0.42, so a blob at world y = 0 projects right around the horizon.
+  const ANCHOR_Y = 0;
   const spheres = [];
-  spheres.push({ c: blobCenter.slice(), r: (0.42 + rng() * 0.14) * scale });
+  spheres.push({ c: [0, ANCHOR_Y, 0], r: 0.4 + rng() * 0.15 });
   for (let i = 1; i < nSpheres; i++) {
     spheres.push({
       c: [
-        blobCenter[0] + (rng() - 0.5) * 0.65 * spread * scale,
-        blobCenter[1] + (rng() - 0.5) * 0.55 * spread * scale,
-        blobCenter[2] + (rng() - 0.5) * 0.50 * spread * scale
+        (rng() - 0.5) * 0.7 * spread,
+        ((rng() - 0.5) * 0.6 * spread) * V + ANCHOR_Y,
+        (rng() - 0.5) * 0.5 * spread
       ],
-      r: (0.22 + rng() * 0.26) * scale
+      r: 0.22 + rng() * 0.25
     });
   }
-  const k = smoothK * scale;
+  // For a vertical stretch we evaluate distance as if the world y axis is
+  // compressed by 1/V — points further from the centre in y map to "smaller"
+  // distances, so the resulting blob is taller. Not a true Euclidean SDF
+  // (it's an ellipsoidal approximation) but it works for our raymarcher.
+  function ellipsoidSDF(x, y, z, c, r) {
+    const dx = x - c[0];
+    const dy = (y - c[1]) / V;
+    const dz = z - c[2];
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  }
   return function (x, y, z) {
-    let d = sphereSDF(x, y, z, spheres[0].c, spheres[0].r);
+    let d = ellipsoidSDF(x, y, z, spheres[0].c, spheres[0].r);
     for (let i = 1; i < spheres.length; i++) {
-      d = smin(d, sphereSDF(x, y, z, spheres[i].c, spheres[i].r), k);
+      d = smin(d, ellipsoidSDF(x, y, z, spheres[i].c, spheres[i].r), smoothK);
     }
     return d;
   };
 }
 
 // ============================================================
-// Camera (perspective with optional pitch/tilt)
-//   tiltDeg > 0  ⇒ camera looks UP, horizon falls to LOWER part of screen
+// Camera + raymarch (orthographic in y, mild perspective in z so the
+// horizon plane is visible)
 // ============================================================
-function makeCamera(tiltDeg) {
-  const t = tiltDeg * Math.PI / 180;
-  const F = [0, Math.sin(t), Math.cos(t)];     // forward
-  const R = [1, 0, 0];                          // right
-  // up = F × R  (right-handed, world +y up)
-  const U = [
-    F[1] * R[2] - F[2] * R[1],
-    F[2] * R[0] - F[0] * R[2],
-    F[0] * R[1] - F[1] * R[0]
-  ];
-  const focal = 4;
-  // Horizon in screen: where the ray has dy = 0.
-  // dy = F[1]*focal + U[1]*sy = 0 → sy = -F[1]*focal / U[1]
-  const syHorizon = -F[1] * focal / U[1];
-  return { pos: [0, 0, -5], F, R, U, focal, syHorizon };
-}
-
-// World-y of the blob anchor such that worldToScreen([0, y, 0]) = (0, 0).
-// From U·D = 0 with D = ([0,y,0] - cam.pos):
-//   U[1]·(y - cam.pos[1]) + U[2]·(0 - cam.pos[2]) = 0
-function blobAnchorY(cam) {
-  return cam.pos[1] - cam.U[2] * (0 - cam.pos[2]) / cam.U[1];
-}
-
-// Decide blob centers + size scale.
-// For nBlobs=2: place at (±X, anchorY, 0) so the blobs are nearly touching
-// AND fit within the visible image area at the blob's depth (z=0).
-function computeBlobLayout(state, cam) {
-  const anchorY = blobAnchorY(cam);
-  if (state.nBlobs === 1) {
-    return { centers: [[0, anchorY, 0]], scale: 1.0 };
-  }
-  // For a world point (X, anchorY, 0):
-  //   F·D = F[1]*anchorY + F[2]*(-cam.pos[2])
-  //   sx_screen = focal * X / (F·D)
-  // Solve sx_screen = SX_MAX for X (world x at the right edge of the visible area
-  // at the blob's depth):
-  const FdotD = cam.F[1] * anchorY + cam.F[2] * (-cam.pos[2]);
-  const visibleX = SX_MAX * FdotD / cam.focal;
-
-  // Joint constraints (with `rEff` = blob's effective radius in world):
-  //   X + rEff ≤ visibleX - margin     ← stay on the page
-  //   X ≥ rEff + gap/2                  ← nearly touching, with small gap
-  // Tightest case (both equalities):
-  //   rEff = (visibleX - margin - gap/2) / 2
-  //   X    = rEff + gap/2
-  const margin = 0.08;
-  const gap = 0.06;
-  const rEff = Math.max(0.1, (visibleX - margin - gap / 2) / 2);
-  const X = rEff + gap / 2;
-
-  // Map effective radius to a `scale` for the blob. rEffBase is a rough estimate
-  // of the unit-scale blob's outer extent.
-  const rEffBase = 0.325 * state.spread + 0.48 + 0.06 * state.smoothK;
-  const scale = Math.min(1.0, rEff / rEffBase);
-  return { centers: [[-X, anchorY, 0], [X, anchorY, 0]], scale };
-}
-
-// Build the full scene SDF for one or two blobs.
-function buildSceneSDF(state, cam, rng) {
-  const layout = computeBlobLayout(state, cam);
-  const sdfs = layout.centers.map(c =>
-    makeBlobSDF(rng, state.nSpheres, state.smoothK, c, state.spread, layout.scale));
-  if (sdfs.length === 1) return { sdf: sdfs[0], layout };
-  return {
-    sdf: function (x, y, z) {
-      let d = sdfs[0](x, y, z);
-      for (let i = 1; i < sdfs.length; i++) {
-        const d2 = sdfs[i](x, y, z);
-        if (d2 < d) d = d2;
-      }
-      return d;
-    },
-    layout
-  };
-}
-
-function castRay(sx, sy, cam) {
-  const dx = cam.F[0] * cam.focal + cam.R[0] * sx + cam.U[0] * sy;
-  const dy = cam.F[1] * cam.focal + cam.R[1] * sx + cam.U[1] * sy;
-  const dz = cam.F[2] * cam.focal + cam.R[2] * sx + cam.U[2] * sy;
+function castRay(sx, sy) {
+  // direction = F·focal + R·sx + U·sy, normalized
+  const dx = camF[0] * FOCAL + camR[0] * sx + camU[0] * sy;
+  const dy = camF[1] * FOCAL + camR[1] * sx + camU[1] * sy;
+  const dz = camF[2] * FOCAL + camR[2] * sx + camU[2] * sy;
   const len = Math.hypot(dx, dy, dz);
   return [dx / len, dy / len, dz / len];
 }
-
-function worldToScreen(P, cam) {
-  const dx = P[0] - cam.pos[0], dy = P[1] - cam.pos[1], dz = P[2] - cam.pos[2];
-  const fDotD = cam.F[0] * dx + cam.F[1] * dy + cam.F[2] * dz;
-  if (fDotD <= 1e-6) return null; // behind camera
-  const s = cam.focal / fDotD;
-  return [
-    s * (cam.R[0] * dx + cam.R[1] * dy + cam.R[2] * dz),
-    s * (cam.U[0] * dx + cam.U[1] * dy + cam.U[2] * dz)
-  ];
-}
-
-// ============================================================
-// Raymarcher
-// ============================================================
 function rayMarch(sdf, ox, oy, oz, dx, dy, dz, tMax) {
   let t = 0;
   for (let i = 0; i < 96; i++) {
@@ -321,10 +236,22 @@ function normalAt(sdf, x, y, z) {
 }
 
 // ============================================================
-// Scene buffer (depth, normal, lighting, surface)
-//   surface: 0 = sky, 1 = blob, 2 = ground
+// Scene buffer (depth, normal, lighting, surface, precomputed primary
+// hatch angle index per pixel)
+// surface: 0 = sky, 1 = blob, 2 = ground
 // ============================================================
-function renderSceneBuffer(state, sdf, cam) {
+function snapAngle(a) {
+  let amod = ((a % Math.PI) + Math.PI) % Math.PI;
+  let bestI = 0, bestD = Infinity;
+  for (let i = 0; i < HATCH_ANGLES.length; i++) {
+    let d = Math.abs(amod - HATCH_ANGLES[i]);
+    if (d > Math.PI / 2) d = Math.PI - d;
+    if (d < bestD) { bestD = d; bestI = i; }
+  }
+  return bestI;
+}
+
+function renderSceneBuffer(state, sdf) {
   const W = state.bufRes;
   const H = Math.round(W * (SY_MAX - SY_MIN) / (SX_MAX - SX_MIN));
   const N = W * H;
@@ -333,7 +260,8 @@ function renderSceneBuffer(state, sdf, cam) {
     surface: new Uint8Array(N),
     nx: new Float32Array(N), ny: new Float32Array(N), nz: new Float32Array(N),
     light: new Float32Array(N),
-    depth: new Float32Array(N)
+    depth: new Float32Array(N),
+    primary: new Uint8Array(N)
   };
 
   let lL = Math.hypot(state.lx, state.ly, state.lz) || 1;
@@ -344,20 +272,19 @@ function renderSceneBuffer(state, sdf, cam) {
     for (let px = 0; px < W; px++) {
       const sx = SX_MIN + (px / (W - 1)) * (SX_MAX - SX_MIN);
       const idx = py * W + px;
-      const [dx, dy, dz] = castRay(sx, sy, cam);
+      const [dx, dy, dz] = castRay(sx, sy);
 
       let tG = -1;
       if (dy < -1e-5) {
-        const t = (GROUND_Y - cam.pos[1]) / dy;
+        const t = (GROUND_Y - CAM[1]) / dy;
         if (t > 0) tG = t;
       }
-      const tB = rayMarch(sdf, cam.pos[0], cam.pos[1], cam.pos[2], dx, dy, dz, 30);
+      const tB = rayMarch(sdf, CAM[0], CAM[1], CAM[2], dx, dy, dz, 25);
 
-      let hit = 0, t = -1, n = null;
+      let hit = 0, n = null, t = -1;
       if (tB > 0 && (tG < 0 || tB < tG)) {
         hit = 1; t = tB;
-        n = normalAt(sdf,
-          cam.pos[0] + dx * tB, cam.pos[1] + dy * tB, cam.pos[2] + dz * tB);
+        n = normalAt(sdf, CAM[0] + dx * tB, CAM[1] + dy * tB, CAM[2] + dz * tB);
       } else if (tG > 0) {
         hit = 2; t = tG; n = [0, 1, 0];
       }
@@ -367,7 +294,21 @@ function renderSceneBuffer(state, sdf, cam) {
       buf.nx[idx] = n[0]; buf.ny[idx] = n[1]; buf.nz[idx] = n[2];
       buf.depth[idx] = t;
       const ld = Math.max(0, n[0] * L[0] + n[1] * L[1] + n[2] * L[2]);
-      buf.light[idx] = 0.18 + 0.82 * ld;
+      buf.light[idx] = 0.15 + 0.85 * ld;
+
+      // Per-pixel "primary" hatch angle = perpendicular to projected normal.
+      // For very face-on regions (small projected normal), the angle is
+      // unstable, so default to the diagonal there.
+      const projMag = Math.hypot(n[0], n[1]);
+      let pri;
+      if (hit === 2) {
+        pri = 0; // ground = horizontal
+      } else if (projMag < 0.15) {
+        pri = 1;
+      } else {
+        pri = snapAngle(Math.atan2(n[1], n[0]) + Math.PI / 2);
+      }
+      buf.primary[idx] = pri;
     }
   }
   return buf;
@@ -381,347 +322,115 @@ function bufIdx(buf, sx, sy) {
 }
 
 // ============================================================
-// Curved blob hatches via tangent-field streamlines
-// ----
-// At each surface point with normal N and (normalized) light L,
-//   T_primary = normalize(N × L)        — perpendicular to lighting gradient
-//   T_cross   = normalize(N × T_primary) — orthogonal in tangent plane
-// Project to screen and step. The screen-space projection of T changes as
-// N varies along the surface ⇒ the path curves.
-// A claim-map (Jobard-Lefer style) prevents adjacent streamlines from merging.
+// Hatching decision: for each (sx, sy) and a given hatch angle index,
+// returns whether the scan line at that angle should be "on" here.
 // ============================================================
-function markClaim(claim, W, H, px, py, r) {
-  const r2 = r * r;
-  const x0 = Math.max(0, px - r), x1 = Math.min(W - 1, px + r);
-  const y0 = Math.max(0, py - r), y1 = Math.min(H - 1, py + r);
-  for (let y = y0; y <= y1; y++) {
-    const dy = y - py;
-    const row = y * W;
-    for (let x = x0; x <= x1; x++) {
-      const dx = x - px;
-      if (dx * dx + dy * dy <= r2) claim[row + x] = 1;
-    }
-  }
+function shouldDrawAt(buf, sx, sy, angleIdx) {
+  const idx = bufIdx(buf, sx, sy);
+  if (idx < 0) return false;
+  // Sky and ground are handled by their own generators — the screen-space
+  // scan-line passes here are blob-only.
+  if (buf.surface[idx] !== 1) return false;
+
+  const pri = buf.primary[idx];
+  if (angleIdx === pri) return true;
+
+  // Blob: tiered crosshatch by offset from primary.
+  const offset = (angleIdx - pri + 4) % 4;
+  const darkness = 1 - buf.light[idx];
+  const T = [0, 0.30, 0.55, 0.78];
+  return darkness > T[offset];
 }
 
-function traceTangent(sx0, sy0, dirSign, buf, cam, L, claim, stepScreen, useCross) {
-  // Trace ONLY — does not mutate `claim`. The caller marks the path after
-  // it finishes so the tracer never terminates on its own claim trail.
-  const points = [];
-  let sx = sx0, sy = sy0;
-  let prevX = null, prevY = null;
-
-  for (let step = 0; step < 400; step++) {
-    const idx = bufIdx(buf, sx, sy);
-    if (idx < 0) break;
-    if (buf.surface[idx] !== 1) break;
-    if (step > 0 && claim[idx]) break;     // ran into another streamline
-
-    const nx = buf.nx[idx], ny = buf.ny[idx], nz = buf.nz[idx];
-
-    // primary = N × L
-    const px3 = ny * L[2] - nz * L[1];
-    const py3 = nz * L[0] - nx * L[2];
-    const pz3 = nx * L[1] - ny * L[0];
-    let tx, ty, tz;
-    if (!useCross) {
-      tx = px3; ty = py3; tz = pz3;
-    } else {
-      // cross = N × primary
-      tx = ny * pz3 - nz * py3;
-      ty = nz * px3 - nx * pz3;
-      tz = nx * py3 - ny * px3;
-    }
-    const tlen = Math.hypot(tx, ty, tz);
-    if (tlen < 1e-3) break;                // degenerate (highlight / antipode)
-    tx /= tlen; ty /= tlen; tz /= tlen;
-
-    // Project tangent to screen via R, U.
-    const dsx = cam.R[0] * tx + cam.R[1] * ty + cam.R[2] * tz;
-    const dsy = cam.U[0] * tx + cam.U[1] * ty + cam.U[2] * tz;
-    const dmag = Math.hypot(dsx, dsy);
-    if (dmag < 1e-3) break;                // tangent edge-on ⇒ silhouette
-    let dirx = dsx / dmag, diry = dsy / dmag;
-
-    if (prevX !== null && (dirx * prevX + diry * prevY) < 0) {
-      dirx = -dirx; diry = -diry;
-    }
-    prevX = dirx; prevY = diry;
-
-    const nsx = sx + dirx * stepScreen * dirSign;
-    const nsy = sy + diry * stepScreen * dirSign;
-    if (nsx < SX_MIN || nsx > SX_MAX || nsy < SY_MIN || nsy > SY_MAX) break;
-
-    points.push([nsx, nsy]);
-    sx = nsx; sy = nsy;
-  }
-  return points;
-}
-
-// Rasterize a finished streamline into the claim map with stripe radius.
-function claimPath(path, buf, claim, claimR) {
-  const W = buf.W, H = buf.H;
-  for (let i = 0; i < path.length; i++) {
-    const idx = bufIdx(buf, path[i][0], path[i][1]);
-    if (idx < 0) continue;
-    const px = idx % W, py = (idx - px) / W;
-    markClaim(claim, W, H, px, py, claimR);
-  }
-}
-
-// Split a traced streamline into sub-paths based on per-point lightness.
-// The streamline still claims its full footprint (so neighbors keep spacing),
-// but we DRAW only where light < `cutoff`. Highlights → empty, shadows → solid.
-// Optional `gateMin` cuts the *other* end too (e.g. cross-hatch is only useful
-// in deep shadow, so pass gateMin=0.55 to drop everything lighter than that).
-function clipByLight(path, buf, cutoff, gateMin) {
-  const segments = [];
-  let current = [];
-  for (let i = 0; i < path.length; i++) {
-    const p = path[i];
-    const idx = bufIdx(buf, p[0], p[1]);
-    const light = idx >= 0 ? buf.light[idx] : 1.0;
-    const draw = (light < cutoff) && (gateMin === undefined || light < gateMin);
-    if (draw) {
-      current.push(p);
-    } else if (current.length >= 2) {
-      segments.push(current);
-      current = [];
-    } else {
-      current = [];
-    }
-  }
-  if (current.length >= 2) segments.push(current);
-  return segments;
-}
-
-function generateBlobHatches(state, buf, cam) {
+// ============================================================
+// Hatch generation: scan parallel lines across the image at each angle.
+// ============================================================
+function generateHatches(state, buf) {
   const paths = [];
-  const W = buf.W, H = buf.H;
+  const spacingMM = state.lw * state.density;
+  const worldStep = Math.max(0.002, spacingMM * WORLD_PER_MM);
+  const sampleStep = Math.max(0.0015, worldStep * 0.35);
+  const RANGE = 1.8;
 
-  let lL = Math.hypot(state.lx, state.ly, state.lz) || 1;
-  const L = [state.lx / lL, state.ly / lL, state.lz / lL];
+  for (let a = 0; a < HATCH_ANGLES.length; a++) {
+    const ang = HATCH_ANGLES[a];
+    const ca = Math.cos(ang), sa = Math.sin(ang);
 
-  const spacingWorld = state.lw * state.density * WORLD_PER_MM;
-  const pixPerWorld = (W - 1) / (SX_MAX - SX_MIN);
-  const claimR = Math.max(1, Math.round(spacingWorld * pixPerWorld * 0.42));
-  const stepScreen = Math.max(0.0015, spacingWorld * 0.4);
+    // Stagger every other angle by half spacing so different angle grids
+    // don't visually align into moiré.
+    const phase = (a % 2) * worldStep * 0.5;
+    for (let s = -RANGE + phase; s <= RANGE; s += worldStep) {
+      const sx0 = -sa * s;
+      const sy0 = ca * s;
 
-  // ---- Primary pass: contour-following hatches across the whole blob ----
-  const seedSpacing = spacingWorld * 0.7;
-  const jit = makeRng(state.seed + ':seedJitter');
+      let inDraw = false;
+      let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
 
-  const claim = new Uint8Array(W * H);
-  for (let sy = SY_MAX; sy > SY_MIN; sy -= seedSpacing) {
-    for (let sx = SX_MIN; sx < SX_MAX; sx += seedSpacing) {
-      const jx = (jit() - 0.5) * seedSpacing * 0.5;
-      const jy = (jit() - 0.5) * seedSpacing * 0.5;
-      const ssx = sx + jx, ssy = sy + jy;
-      if (ssx < SX_MIN || ssx > SX_MAX || ssy < SY_MIN || ssy > SY_MAX) continue;
-      const sIdx = bufIdx(buf, ssx, ssy);
-      if (sIdx < 0 || buf.surface[sIdx] !== 1 || claim[sIdx]) continue;
+      for (let t = -RANGE; t <= RANGE; t += sampleStep) {
+        const sx = sx0 + ca * t;
+        const sy = sy0 + sa * t;
+        const inBounds = (sx >= SX_MIN && sx <= SX_MAX &&
+                          sy >= SY_MIN && sy <= SY_MAX);
+        const draw = inBounds && shouldDrawAt(buf, sx, sy, a);
 
-      const fwd = traceTangent(ssx, ssy, +1, buf, cam, L, claim, stepScreen, false);
-      const bwd = traceTangent(ssx, ssy, -1, buf, cam, L, claim, stepScreen, false);
-      const path = [...bwd.reverse(), [ssx, ssy], ...fwd];
-      if (path.length >= 3) {
-        // Claim the full streamline so neighboring streamlines space correctly,
-        // but only draw the portion where the surface is shaded.
-        claimPath(path, buf, claim, claimR);
-        const segs = clipByLight(path, buf, state.highlightCutoff);
-        for (const s of segs) paths.push(s);
-      }
-    }
-  }
-
-  // ---- Cross pass: orthogonal hatching in shadow regions ----
-  const claimC = new Uint8Array(W * H);
-  const jit2 = makeRng(state.seed + ':seedCross');
-  const seedSpacingC = spacingWorld * 0.85;
-  for (let sy = SY_MAX; sy > SY_MIN; sy -= seedSpacingC) {
-    for (let sx = SX_MIN; sx < SX_MAX; sx += seedSpacingC) {
-      const jx = (jit2() - 0.5) * seedSpacingC * 0.5;
-      const jy = (jit2() - 0.5) * seedSpacingC * 0.5;
-      const ssx = sx + jx, ssy = sy + jy;
-      if (ssx < SX_MIN || ssx > SX_MAX || ssy < SY_MIN || ssy > SY_MAX) continue;
-      const sIdx = bufIdx(buf, ssx, ssy);
-      if (sIdx < 0 || buf.surface[sIdx] !== 1 || claimC[sIdx]) continue;
-      if (buf.light[sIdx] > state.shadowCutoff) continue;   // seed only in shadow
-
-      const fwd = traceTangent(ssx, ssy, +1, buf, cam, L, claimC, stepScreen, true);
-      const bwd = traceTangent(ssx, ssy, -1, buf, cam, L, claimC, stepScreen, true);
-      const path = [...bwd.reverse(), [ssx, ssy], ...fwd];
-      if (path.length >= 3) {
-        claimPath(path, buf, claimC, claimR);
-        const segs = clipByLight(path, buf, state.shadowCutoff);
-        for (const s of segs) paths.push(s);
-      }
-    }
-  }
-
-  return paths;
-}
-
-// ============================================================
-// "Pasma classic" — single-angle parallel scan lines across the form
-// with dashed-by-darkness modulation. Closest match to the canonical
-// Universal-Rayhatcher sphere look. No streamlines, no curving — the
-// shading is *entirely* in the dash pattern along straight scan lines.
-// ============================================================
-function generatePasmaHatches(state, buf) {
-  const paths = [];
-  const angle = state.hatchAngle * Math.PI / 180;
-  const ca = Math.cos(angle), sa = Math.sin(angle);
-
-  // Spacing between scan lines (perpendicular)
-  const spacingWorld = state.lw * state.density * WORLD_PER_MM;
-  // Sampling step along each scan line — fine enough that dashes have crisp edges
-  const sampleStep = Math.max(0.0008, spacingWorld * 0.15);
-  // Dash cycle length — 4× the spacing reads as a substantial dash, not a speck.
-  const cycleLen = spacingWorld * 4.0;
-  const RANGE = 1.85;
-
-  // Per-scan-line phase jitter so the dash pattern doesn't form vertical
-  // alignment artifacts between adjacent rows.
-  const phaseJit = makeRng(state.seed + ':pasmaPhase');
-  const floorRange = Math.ceil(RANGE / cycleLen + 2);
-
-  // Tri-zone shading:
-  //   light ≤ shadowCutoff   → onFrac = 1 (solid line through this region)
-  //   light ≥ highlightCutoff → onFrac = 0 (empty paper)
-  //   between                 → linear fade
-  // Make sure the "solid" zone covers at least *some* range, otherwise we
-  // end up with no on-stretch anywhere.
-  const sCut = Math.min(state.shadowCutoff, state.highlightCutoff - 0.05);
-  const hCut = state.highlightCutoff;
-  const fadeRange = hCut - sCut;
-
-  function onFracFor(light) {
-    if (light <= sCut) return 1;
-    if (light >= hCut) return 0;
-    return (hCut - light) / fadeRange;
-  }
-
-  for (let s = -RANGE; s <= RANGE; s += spacingWorld) {
-    const sx0 = -sa * s;
-    const sy0 = ca * s;
-    const phaseOffset = phaseJit();      // [0, 1)
-
-    let inDraw = false;
-    let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
-
-    for (let t = -RANGE; t <= RANGE; t += sampleStep) {
-      const sx = sx0 + ca * t;
-      const sy = sy0 + sa * t;
-      let draw = false;
-
-      if (sx >= SX_MIN && sx <= SX_MAX && sy >= SY_MIN && sy <= SY_MAX) {
-        const idx = bufIdx(buf, sx, sy);
-        if (idx >= 0 && buf.surface[idx] === 1) {
-          const onFrac = onFracFor(buf.light[idx]);
-          if (onFrac >= 0.999) {
-            draw = true;                 // solid
-          } else if (onFrac > 0) {
-            const phaseT = t / cycleLen + phaseOffset + floorRange;
-            const phase = phaseT - Math.floor(phaseT);
-            draw = phase < onFrac;
+        if (draw) {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
+        } else if (inDraw) {
+          const segLen = Math.hypot(lastX - dx0, lastY - dy0);
+          if (segLen > worldStep * 0.4) {
+            paths.push([[dx0, dy0], [lastX, lastY]]);
           }
+          inDraw = false;
         }
       }
-
-      if (draw) {
-        if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
-        lastX = sx; lastY = sy;
-      } else if (inDraw) {
-        if (Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
+      if (inDraw) {
+        const segLen = Math.hypot(lastX - dx0, lastY - dy0);
+        if (segLen > worldStep * 0.4) {
           paths.push([[dx0, dy0], [lastX, lastY]]);
         }
-        inDraw = false;
       }
-    }
-    if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
-      paths.push([[dx0, dy0], [lastX, lastY]]);
     }
   }
   return paths;
 }
 
 // ============================================================
-// Polar crosshatch: lat + lon streamlines around a fixed pole axis P.
-// Same tangent-field machinery as the light-based pass, but reference vector
-// is P instead of L:
-//   latitude  = N × P            (rings perpendicular to the pole)
-//   longitude = N × (N × P)      (meridians from pole to pole)
-// Drawing is gated by `polarThreshold` (only on surface darker than this).
-// ============================================================
-function generatePolarHatches(state, buf, cam) {
-  const paths = [];
-  const W = buf.W, H = buf.H;
-
-  // Resolve axis
-  let P;
-  switch (state.polarAxis) {
-    case 'X': P = [1, 0, 0]; break;
-    case 'Z': P = [0, 0, 1]; break;
-    case 'view': P = [cam.U[0], cam.U[1], cam.U[2]]; break;
-    default:    P = [0, 1, 0]; break;
-  }
-
-  const spacingWorld = state.lw * state.density * WORLD_PER_MM;
-  const pixPerWorld = (W - 1) / (SX_MAX - SX_MIN);
-  const baseClaimR = Math.max(1, Math.round(spacingWorld * pixPerWorld * 0.42));
-  const stepScreen = Math.max(0.0015, spacingWorld * 0.4);
-  // Polar lat/lon never overrides the highlight cutoff: anything brighter
-  // than `highlightCutoff` always stays empty paper, no matter what the
-  // user puts in `polarThreshold`.
-  const thresh = Math.min(state.polarThreshold, state.highlightCutoff);
-
-  // `spacingMul` widens both seed grid AND claim radius so each polar pass
-  // reads as a sparser overlay on top of the light-based primary pass.
-  function runPass(seedKey, useCross, spacingMul, cutoff) {
-    const sSeed = spacingWorld * 0.85 * spacingMul;
-    const claimR = Math.max(1, Math.round(baseClaimR * spacingMul));
-    const claim = new Uint8Array(W * H);
-    const jit = makeRng(state.seed + ':' + seedKey);
-    for (let sy = SY_MAX; sy > SY_MIN; sy -= sSeed) {
-      for (let sx = SX_MIN; sx < SX_MAX; sx += sSeed) {
-        const jx = (jit() - 0.5) * sSeed * 0.5;
-        const jy = (jit() - 0.5) * sSeed * 0.5;
-        const ssx = sx + jx, ssy = sy + jy;
-        if (ssx < SX_MIN || ssx > SX_MAX || ssy < SY_MIN || ssy > SY_MAX) continue;
-        const sIdx = bufIdx(buf, ssx, ssy);
-        if (sIdx < 0 || buf.surface[sIdx] !== 1 || claim[sIdx]) continue;
-        if (buf.light[sIdx] > cutoff) continue;
-
-        const fwd = traceTangent(ssx, ssy, +1, buf, cam, P, claim, stepScreen, useCross);
-        const bwd = traceTangent(ssx, ssy, -1, buf, cam, P, claim, stepScreen, useCross);
-        const path = [...bwd.reverse(), [ssx, ssy], ...fwd];
-        if (path.length >= 3) {
-          claimPath(path, buf, claim, claimR);
-          const segs = clipByLight(path, buf, cutoff);
-          for (const s of segs) paths.push(s);
-        }
-      }
-    }
-  }
-
-  // Latitude: sparser (1.3×) so primary basket-weave still reads.
-  runPass('polarLat', false, 1.3, thresh);
-  // Longitude: even sparser (1.6×) and only in deeper shadow.
-  runPass('polarLon', true,  1.6, thresh * 0.85);
-
-  return paths;
-}
-
-// ============================================================
-// Ground hatches: horizontal scan-lines clipped to ground pixels
+// Ground hatches: horizontal lines spaced evenly in WORLD z (depth),
+// so they bunch toward the horizon and feel like they recede.
+//
+// Camera at (0, 0, -5) hitting ground at y = -0.5 via image plane at z = -1:
+//   ground_z = -5 - 2/sy          ⇔          sy = -2 / (ground_z + 5)
+// Stepping ground_z by a constant amount produces sy steps that shrink
+// toward the horizon — the perspective compression we want.
 // ============================================================
 function generateGroundHatches(state, buf) {
+  // Iterate sy DIRECTLY (not via z) with a smoothly shrinking step.
+  // This avoids the "skip 1 every N" alternation pattern of the previous
+  // algorithm, which caused the visible repeating bands.
+  //
+  //   step(sy) = minDsy + (maxDsy - minDsy) · ((dist_to_horizon)/full_range)²
+  //
+  // → sparse at the bottom (large step), tight at the horizon (~minDsy).
   const paths = [];
-  const spacingWorld = state.lw * state.density * WORLD_PER_MM;
-  const sampleStep = Math.max(0.002, spacingWorld * 0.3);
+  const sampleStep = 0.003;
 
-  for (let sy = SY_MIN; sy <= SY_MAX; sy += spacingWorld) {
+  // Sparse step at the far end (page bottom); tight step near horizon.
+  const maxDsy = state.lw * state.density * WORLD_PER_MM * 1.6;
+  const minDsy = Math.max(state.lw * WORLD_PER_MM * 0.95, 0.0035);
+
+  const fullRange = syHorizon - SY_MIN;
+  if (fullRange <= 0) return paths;
+
+  let sy = SY_MIN;
+  // A small safety to stop juuust short of the horizon where lines would
+  // start overlapping the horizon stroke.
+  const stopAt = syHorizon - minDsy * 0.6;
+
+  while (sy < stopAt) {
+    const d = (syHorizon - sy) / fullRange;          // 1 at bottom → 0 at horizon
+    const step = minDsy + (maxDsy - minDsy) * d * d; // squared falloff
+
     let inDraw = false;
     let x0 = 0, lastX = 0;
     for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
@@ -731,30 +440,36 @@ function generateGroundHatches(state, buf) {
         if (!inDraw) { x0 = sx; inDraw = true; }
         lastX = sx;
       } else if (inDraw) {
-        if (lastX - x0 > spacingWorld * 0.3) paths.push([[x0, sy], [lastX, sy]]);
+        if (lastX - x0 > 0.005) paths.push([[x0, sy], [lastX, sy]]);
         inDraw = false;
       }
     }
-    if (inDraw && lastX - x0 > spacingWorld * 0.3) paths.push([[x0, sy], [lastX, sy]]);
+    if (inDraw && lastX - x0 > 0.005) paths.push([[x0, sy], [lastX, sy]]);
+
+    sy += step;
   }
   return paths;
 }
 
 // ============================================================
-// Sky hatches: 45° scan-lines, dashed with fade-to-top
+// Sky hatches: 45° scan lines clipped to sky pixels, dashed with a
+// top-down fade — solid near the top of the page, fading to nothing
+// as the scan line approaches the horizon.
 // ============================================================
-function generateSkyHatches(state, buf, syHorizon) {
+function generateSkyHatches(state, buf) {
   const paths = [];
-  if (syHorizon >= SY_MAX - 0.05) return paths;
-
   const ang = Math.PI / 4;
   const ca = Math.cos(ang), sa = Math.sin(ang);
 
+  // Slightly sparser than blob hatches so the sky reads as background.
   const spacingWorld = state.lw * state.density * WORLD_PER_MM * 1.3;
   const sampleStep = Math.max(0.0015, spacingWorld * 0.22);
   const cycleLen = spacingWorld * 1.4;
   const RANGE = 1.85;
+
+  // syHorizon is set by setupCamera() at render time.
   const maxSky = SY_MAX - syHorizon;
+  if (maxSky < 0.05) return paths;
 
   for (let s = -RANGE; s <= RANGE; s += spacingWorld) {
     const sx0 = -sa * s;
@@ -766,12 +481,14 @@ function generateSkyHatches(state, buf, syHorizon) {
       const sx = sx0 + ca * t;
       const sy = sy0 + sa * t;
       let draw = false;
-      if (sx >= SX_MIN && sx <= SX_MAX && sy >= SY_MIN && sy <= SY_MAX && sy > syHorizon) {
+      if (sx >= SX_MIN && sx <= SX_MAX && sy >= SY_MIN && sy <= SY_MAX
+          && sy > syHorizon) {
         const idx = bufIdx(buf, sx, sy);
         if (idx >= 0 && buf.surface[idx] === 0) {
+          // Inverted from the previous attempt: solid at the TOP, fades
+          // down toward the horizon. `above` = 1 at top of page, 0 at horizon.
           const above = (sy - syHorizon) / maxSky;
-          const fade = 1 - above;
-          const onFrac = fade * fade;       // squared falloff for nicer feel
+          const onFrac = above * above;          // squared falloff
           const cyc = (t / cycleLen) - Math.floor(t / cycleLen);
           draw = cyc < onFrac;
         }
@@ -794,28 +511,107 @@ function generateSkyHatches(state, buf, syHorizon) {
 }
 
 // ============================================================
+// Sky clouds: horizontal lines in the top third of the page, with a
+// wavy noise displacement so they read as cloud strands rather than
+// a horizon gradient. Drawn only where the buffer reports sky (surface=0).
+// ============================================================
+function generateSkyClouds(state, buf) {
+  const paths = [];
+  // Operate in the top 1/3 of the page (in screen-y).
+  const topThirdStart = SY_MAX - (SY_MAX - SY_MIN) / 3;
+  if (topThirdStart <= syHorizon) return paths;
+
+  // Line spacing comparable to the blob hatching density but a bit looser.
+  const spacing = state.lw * state.density * WORLD_PER_MM * 1.5;
+  const sampleStep = 0.005;
+
+  // Two octaves of value-noise generated from a seeded PRNG. Cheap and good
+  // enough to evoke cloud strands without bringing in a real noise lib.
+  const noiseRng = makeRng(state.seed + ':clouds');
+  const grid = new Float32Array(256);
+  for (let i = 0; i < grid.length; i++) grid[i] = noiseRng();
+  function n1(t) {
+    // 1-D smoothed value noise over `t`, modulo 256.
+    const u = ((t % 256) + 256) % 256;
+    const i = Math.floor(u);
+    const f = u - i;
+    const a = grid[i % 256];
+    const b = grid[(i + 1) % 256];
+    const s = f * f * (3 - 2 * f);                // smoothstep
+    return a + (b - a) * s;
+  }
+
+  // Amplitude of the wavy displacement (in screen-y units). Driven by the
+  // global `waviness` slider so the same control affects clouds and waves.
+  const ampBase = spacing * 1.4 * state.waviness;
+
+  for (let sy = topThirdStart; sy <= SY_MAX; sy += spacing) {
+    // How far up in the band — 0 at bottom of the band, 1 at the top of page.
+    const tBand = (sy - topThirdStart) / (SY_MAX - topThirdStart);
+    // Per-line phase offsets, so adjacent strands don't move in lockstep.
+    const px = 7.13 * (sy - topThirdStart);
+    const py = 19.7 * (sy - topThirdStart);
+
+    let inDraw = false;
+    let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      // Composite of two octaves for organic but still-cloud-like wobble.
+      const n =
+        0.65 * (n1(sx * 4 + px) - 0.5) +
+        0.35 * (n1(sx * 10 + py) - 0.5);
+      const wavy = sy + n * ampBase;
+      if (wavy < topThirdStart || wavy > SY_MAX) {
+        if (inDraw) {
+          if (Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
+            paths.push([[dx0, dy0], [lastX, lastY]]);
+          }
+          inDraw = false;
+        }
+        continue;
+      }
+      const idx = bufIdx(buf, sx, wavy);
+      const isSky = (idx >= 0 && buf.surface[idx] === 0);
+      if (isSky) {
+        if (!inDraw) { dx0 = sx; dy0 = wavy; inDraw = true; }
+        lastX = sx; lastY = wavy;
+      } else if (inDraw) {
+        if (Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
+          paths.push([[dx0, dy0], [lastX, lastY]]);
+        }
+        inDraw = false;
+      }
+    }
+    if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
+      paths.push([[dx0, dy0], [lastX, lastY]]);
+    }
+  }
+  return paths;
+}
+
+// ============================================================
 // Horizon line, broken where the blob occludes it
 // ============================================================
-function addHorizonLine(paths, buf, syHorizon) {
-  if (syHorizon < SY_MIN + 0.02 || syHorizon > SY_MAX - 0.02) return;
+function addHorizonLine(paths, buf) {
+  const HY = syHorizon;
+  if (HY < SY_MIN + 0.02 || HY > SY_MAX - 0.02) return;
   const sampleStep = 0.0025;
   let inDraw = false, x0 = 0, lastX = 0;
   for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
-    const idx = bufIdx(buf, sx, syHorizon);
-    const occluded = (idx >= 0 && buf.surface[idx] === 1);
+    const i = bufIdx(buf, sx, HY);
+    const occluded = (i >= 0 && buf.surface[i] === 1);
     if (!occluded) {
       if (!inDraw) { x0 = sx; inDraw = true; }
       lastX = sx;
     } else if (inDraw) {
-      paths.push([[x0, syHorizon], [lastX, syHorizon]]);
+      paths.push([[x0, HY], [lastX, HY]]);
       inDraw = false;
     }
   }
-  if (inDraw) paths.push([[x0, syHorizon], [lastX, syHorizon]]);
+  if (inDraw) paths.push([[x0, HY], [lastX, HY]]);
 }
 
 // ============================================================
-// Pen-up travel optimization (greedy nearest-neighbor + reversal)
+// Pen-up travel optimization
 // ============================================================
 function optimizePaths(paths) {
   const n = paths.length;
@@ -872,22 +668,16 @@ function lwToStrokeVB(lwMM) { return lwMM * (300 / 25.4); }
 function readState() {
   return {
     seed: document.getElementById('seed').value || '0',
-    orientation: document.getElementById('orientation').value === 'landscape'
-      ? 'landscape' : 'portrait',
-    nBlobs: clampInt(document.getElementById('nBlobs').value, 1, 2, 1),
     nSpheres: clampInt(document.getElementById('nSpheres').value, 2, 8, 4),
-    spread: clampFloat(document.getElementById('spread').value, 0.2, 3.0, 0.6),
-    smoothK: clampFloat(document.getElementById('smoothK').value, 0.05, 0.8, 0.4),
-    camTilt: clampFloat(document.getElementById('camTilt').value, -20, 20, 6),
+    spread: clampFloat(document.getElementById('spread').value, 0.2, 3.0, 1.0),
+    verticality: clampFloat(document.getElementById('verticality').value, 0.4, 3.0, 1.4),
+    smoothK: clampFloat(document.getElementById('smoothK').value, 0.05, 0.8, 0.3),
+    camTilt: clampFloat(document.getElementById('camTilt').value, 0, 20, 6),
+    skyStyle: document.getElementById('skyStyle').value,
+    waviness: clampFloat(document.getElementById('waviness').value, 0, 8, 3.0),
     lw: clampFloat(document.getElementById('lw').value, 0.05, 2.0, 0.3),
-    density: clampFloat(document.getElementById('density').value, 1.7, 8, 2.75),
-    bufRes: clampInt(document.getElementById('bufRes').value, 200, 800, 450),
-    hatchStyle: document.getElementById('hatchStyle').value,        // pasma | light | polar | hybrid
-    hatchAngle: clampFloat(document.getElementById('hatchAngle').value, -90, 90, 30),
-    polarAxis: document.getElementById('polarAxis').value,          // X | Y | Z | view
-    polarThreshold: clampFloat(document.getElementById('polarThreshold').value, 0.2, 1.0, 0.7),
-    highlightCutoff: clampFloat(document.getElementById('highlightCutoff').value, 0.25, 0.95, 0.65),
-    shadowCutoff: clampFloat(document.getElementById('shadowCutoff').value, 0.2, 0.7, 0.5),
+    density: clampFloat(document.getElementById('density').value, 1.2, 8, 2.5),
+    bufRes: clampInt(document.getElementById('bufRes').value, 200, 800, 400),
     lx: clampFloat(document.getElementById('lx').value, -2, 2, -0.6),
     ly: clampFloat(document.getElementById('ly').value, -2, 2, 0.8),
     lz: clampFloat(document.getElementById('lz').value, -2, 2, -0.4),
@@ -906,18 +696,16 @@ function tick() { return new Promise(r => setTimeout(r, 0)); }
 
 function syncFromUrl() {
   const params = new URLSearchParams(window.location.search);
-  const keys = ['seed','orientation','nBlobs','lw','density','nSpheres','spread',
-                'smoothK','camTilt','bufRes','hatchStyle','hatchAngle','polarAxis',
-                'polarThreshold','highlightCutoff','shadowCutoff','lx','ly','lz'];
+  const keys = ['seed','lw','density','nSpheres','spread','verticality',
+                'smoothK','camTilt','skyStyle','waviness','bufRes','lx','ly','lz'];
   for (const k of keys) {
     if (params.has(k)) document.getElementById(k).value = params.get(k);
   }
 }
 function writeUrl(state) {
   const params = new URLSearchParams();
-  for (const k of ['seed','orientation','nBlobs','lw','density','nSpheres',
-                   'spread','smoothK','camTilt','hatchStyle','hatchAngle',
-                   'polarAxis','polarThreshold','highlightCutoff','shadowCutoff']) {
+  for (const k of ['seed','lw','density','nSpheres','spread','verticality',
+                   'smoothK','camTilt','skyStyle','waviness']) {
     params.set(k, state[k]);
   }
   const url = window.location.pathname + '?' + params.toString();
@@ -936,89 +724,54 @@ async function doRender() {
     const state = readState();
     writeUrl(state);
 
-    setStatus('Building scene…');
+    setStatus('Building blob SDF…');
     await tick();
-    setOrientation(state.orientation === 'landscape');
-    const cam = makeCamera(state.camTilt);
+    setupCamera(state.camTilt);
     const rng = makeRng(state.seed);
-    const { sdf, layout } = buildSceneSDF(state, cam, rng);
+    const sdf = makeBlobSDF(rng, state.nSpheres, state.smoothK,
+                            state.spread, state.verticality);
 
     setStatus('Raymarching scene buffer…');
     await tick();
     const t0 = performance.now();
-    const buf = renderSceneBuffer(state, sdf, cam);
+    const buf = renderSceneBuffer(state, sdf);
     const t1 = performance.now();
 
-    setStatus('Tracing blob hatches…');
+    setStatus('Generating hatches…');
     await tick();
-    let blobPaths = [];
-    if (state.hatchStyle === 'pasma') {
-      blobPaths = generatePasmaHatches(state, buf);
-    } else {
-      if (state.hatchStyle === 'light' || state.hatchStyle === 'hybrid') {
-        blobPaths = blobPaths.concat(generateBlobHatches(state, buf, cam));
-      }
-      if (state.hatchStyle === 'polar' || state.hatchStyle === 'hybrid') {
-        blobPaths = blobPaths.concat(generatePolarHatches(state, buf, cam));
-      }
-    }
+    const blob = generateHatches(state, buf);
+    const ground = generateGroundHatches(state, buf);
+    const sky = (state.skyStyle === 'clouds')
+      ? generateSkyClouds(state, buf)
+      : generateSkyHatches(state, buf);
+    const rawPaths = blob.concat(ground).concat(sky);
+    addHorizonLine(rawPaths, buf);
     const t2 = performance.now();
-
-    setStatus('Ground + sky hatches…');
-    await tick();
-    const groundPaths = generateGroundHatches(state, buf);
-    const skyPaths = generateSkyHatches(state, buf, cam.syHorizon);
-    const t3 = performance.now();
-
-    const all = blobPaths.concat(groundPaths).concat(skyPaths);
-    addHorizonLine(all, buf, cam.syHorizon);
 
     setStatus('Optimizing pen travel…');
     await tick();
-    const paths = optimizePaths(all);
-    const t4 = performance.now();
+    const paths = optimizePaths(rawPaths);
+    const t3 = performance.now();
 
     const d = buildPathD(paths);
     const strokeVB = lwToStrokeVB(state.lw);
 
     const svg = document.getElementById('preview');
     svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
-    // Preview size: scale so the longer side ≈ 600px on screen.
-    const previewLong = 600;
-    if (state.orientation === 'landscape') {
-      svg.style.width = previewLong + 'px';
-      svg.style.height = (previewLong * H_IN / W_IN) + 'px';
-    } else {
-      svg.style.width = (previewLong * W_IN / H_IN) + 'px';
-      svg.style.height = previewLong + 'px';
-    }
+    svg.style.width = '480px';
+    svg.style.height = '600px';
     svg.innerHTML =
       '<rect width="' + VB_W + '" height="' + VB_H + '" fill="white"/>' +
       '<path d="' + d + '" stroke="black" stroke-width="' + strokeVB.toFixed(3) +
       '" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
 
-    // Snapshot all dims so doSave produces correct output even if user
-    // changes the UI before exporting.
-    lastRender = {
-      state, paths, d, strokeVB,
-      W_IN, H_IN, VB_W, VB_H
-    };
+    lastRender = { state, paths, d, strokeVB };
 
-    const spacing = state.lw * state.density;
-    const gap = spacing - state.lw;
-    const ratio = gap / state.lw;
-    const ratioWarn = ratio < 0.6
-      ? '  ⚠ gap/lw=' + ratio.toFixed(2) + ' (raise Density for visible hatching)'
-      : '';
     setStatus(
-      paths.length + ' strokes  (blob=' + blobPaths.length +
-        ', ground=' + groundPaths.length + ', sky=' + skyPaths.length + ')\n' +
-      'buffer ' + Math.round(t1 - t0) + 'ms · blob ' + Math.round(t2 - t1) +
-        'ms · gnd+sky ' + Math.round(t3 - t2) + 'ms · opt ' + Math.round(t4 - t3) + 'ms\n' +
-      'lw=' + state.lw + 'mm  spacing=' + spacing.toFixed(2) + 'mm  ' +
-      'horizon sy=' + cam.syHorizon.toFixed(2) + ratioWarn + '\n' +
-      state.nBlobs + ' blob' + (state.nBlobs > 1 ? 's' : '') +
-        '  scale=' + layout.scale.toFixed(2)
+      paths.length + ' strokes\n' +
+      'buffer ' + Math.round(t1 - t0) + 'ms · hatch ' + Math.round(t2 - t1) +
+      'ms · opt ' + Math.round(t3 - t2) + 'ms\n' +
+      'lw=' + state.lw + 'mm  spacing=' + (state.lw * state.density).toFixed(2) + 'mm'
     );
   } catch (err) {
     setStatus('Error: ' + err.message);
@@ -1031,13 +784,11 @@ async function doRender() {
 function doSave() {
   if (!lastRender) { setStatus('Nothing to save yet — render first.'); return; }
   const { state, d, strokeVB } = lastRender;
-  const wIn = lastRender.W_IN, hIn = lastRender.H_IN;
-  const vbW = lastRender.VB_W, vbH = lastRender.VB_H;
   const svgText =
     '<?xml version="1.0" encoding="UTF-8"?>\n' +
     '<svg xmlns="http://www.w3.org/2000/svg" ' +
-    'width="' + wIn + 'in" height="' + hIn + 'in" ' +
-    'viewBox="0 0 ' + vbW + ' ' + vbH + '">\n' +
+    'width="' + W_IN + 'in" height="' + H_IN + 'in" ' +
+    'viewBox="0 0 ' + VB_W + ' ' + VB_H + '">\n' +
     '  <path d="' + d + '" stroke="black" stroke-width="' + strokeVB.toFixed(3) +
     '" fill="none" stroke-linecap="round" stroke-linejoin="round"/>\n' +
     '</svg>\n';
@@ -1045,8 +796,7 @@ function doSave() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'rayblob_' + state.orientation + '_seed-' + state.seed +
-    '_lw-' + state.lw + '.svg';
+  a.download = 'rayblob_seed-' + state.seed + '_lw-' + state.lw + '.svg';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
