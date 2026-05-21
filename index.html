@@ -388,6 +388,16 @@ function makePlane(nx, ny, nz, d) {
   };
 }
 
+// Torus on the xz plane: major radius R, minor radius r.
+function makeTorus(cx, cy, cz, R, r) {
+  return function (x, y, z) {
+    const dx = x - cx, dz = z - cz;
+    const q = Math.sqrt(dx * dx + dz * dz) - R;
+    const dy = y - cy;
+    return Math.sqrt(q * q + dy * dy) - r;
+  };
+}
+
 // Sphere primitive.
 function makeSphere(cx, cy, cz, r) {
   return function (x, y, z) {
@@ -529,6 +539,32 @@ function makeCapsuleZ(cx, cy, cz, halfLen, r) {
   };
 }
 
+// Beam helper: returns viewBox-space polylines for a fan of light rays
+// emanating from a world-space lamp position. Used by the lighthouse
+// scenes via the scene `extraStrokes` callback.
+function lighthouseBeam(ctx, lampWorldPos, opts) {
+  opts = opts || {};
+  const lampVB = ctx.worldToVB(lampWorldPos);
+  if (!lampVB) return [];
+  const numRays    = opts.numRays    != null ? opts.numRays    : 7;
+  const centerDeg  = opts.centerDeg  != null ? opts.centerDeg  : 30;  // 0=up, +=right
+  const spreadDeg  = opts.spreadDeg  != null ? opts.spreadDeg  : 22;
+  const lengthVB   = opts.lengthVB   != null ? opts.lengthVB   : 900;
+  const paths = [];
+  for (let i = 0; i < numRays; i++) {
+    const t = numRays === 1 ? 0 : (i / (numRays - 1) - 0.5) * 2;  // -1..1
+    const ang = (centerDeg + t * spreadDeg) * Math.PI / 180;
+    // 0° = straight up in viewBox (negative y direction).
+    const dx =  Math.sin(ang) * lengthVB;
+    const dy = -Math.cos(ang) * lengthVB;
+    paths.push([
+      [lampVB[0],      lampVB[1]],
+      [lampVB[0] + dx, lampVB[1] + dy]
+    ]);
+  }
+  return paths;
+}
+
 // ============================================================
 // Scene registry. Adding a new sister project = adding an entry here.
 // Each entry receives (rng, state) and returns the full scene SDF.
@@ -586,13 +622,15 @@ const SCENES = {
     return sdfSubtract(base, [tunnel]);
   },
   lighthouse: function (rng, state) {
-    // Classic tower: cylindrical body, slightly wider lamp room above,
-    // a small hemispherical roof on top. smoothK softens the joins so the
-    // sections read as one continuous form rather than stacked tubes.
     const body      = makeCylinderY(0, -0.70,  0.60, 0, 0.16);
     const lamp      = makeCylinderY(0,  0.60,  0.78, 0, 0.22);
     const roof      = makeSphere(0, 0.86, 0, 0.18);
-    return sdfUnion([body, lamp, roof], 0.04);
+    return {
+      sdf: sdfUnion([body, lamp, roof], 0.04),
+      extraStrokes: function (ctx) {
+        return lighthouseBeam(ctx, [0, 0.69, 0]);
+      }
+    };
   },
   cone: function (rng, state) {
     // Circular cone — apex up, base on the ground plane.
@@ -659,7 +697,12 @@ const SCENES = {
     const lamp = makeCylinderY(-0.06, 0.78,  0.94, 0, 0.17);
     const roof = makeSphere(-0.06, 1.02, 0, 0.13);
     const tower = sdfUnion([body, lamp, roof], 0.04);
-    return sdfUnion([island, tower], 0);   // sharp union — tower distinct from island
+    return {
+      sdf: sdfUnion([island, tower], 0),
+      extraStrokes: function (ctx) {
+        return lighthouseBeam(ctx, [-0.06, 0.86, 0]);
+      }
+    };
   },
   twistedColumn: function (rng, state) {
     // Tall slab bent into a helix by twistY. Demonstrates the new
@@ -677,6 +720,19 @@ const SCENES = {
 // Camera + raymarch (orthographic in y, mild perspective in z so the
 // horizon plane is visible)
 // ============================================================
+// Inverse of castRay — projects a 3-D world point onto the screen (sx, sy).
+// Returns null if the point is behind the camera.
+function worldToScreen(P) {
+  const dx = P[0] - CAM[0], dy = P[1] - CAM[1], dz = P[2] - CAM[2];
+  const fDotD = camF[0] * dx + camF[1] * dy + camF[2] * dz;
+  if (fDotD <= 1e-6) return null;
+  const t = FOCAL / fDotD;
+  return [
+    t * (camR[0] * dx + camR[1] * dy + camR[2] * dz),
+    t * (camU[0] * dx + camU[1] * dy + camU[2] * dz)
+  ];
+}
+
 function castRay(sx, sy) {
   // direction = F·focal + R·sx + U·sy, normalized
   const dx = camF[0] * FOCAL + camR[0] * sx + camU[0] * sy;
@@ -1901,8 +1957,25 @@ async function doRender() {
     const paths = optimizePaths(rawPaths);
     const t3 = performance.now();
 
+    // Scene-supplied additive strokes (non-SDF overlays: light beams,
+    // beam fans, scattered stars, aurora ribbons, etc.). Called AFTER the
+    // camera is set up so the scene can use worldToScreen / worldToVB.
+    let extraVB = [];
+    if (sceneResult && sceneResult.extraStrokes) {
+      const ctx = {
+        worldToScreen,
+        worldToVB: function (P) {
+          const s = worldToScreen(P);
+          return s ? [sxToVB(s[0]), syToVB(s[1])] : null;
+        },
+        sxToVB, syToVB, syHorizon: syHorizon
+      };
+      try { extraVB = sceneResult.extraStrokes(ctx, state) || []; }
+      catch (e) { console.warn('extraStrokes error', e); }
+    }
+
     const labelPaths = buildBottomLabel(state, paths.length);
-    const d = buildPathD(paths, labelPaths);
+    const d = buildPathD(paths, extraVB.concat(labelPaths));
     const strokeVB = lwToStrokeVB(state.lw);
 
     const svg = document.getElementById('preview');
