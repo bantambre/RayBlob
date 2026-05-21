@@ -52,6 +52,7 @@
         <option value="iceberg">Iceberg</option>
         <option value="cone">Cone</option>
         <option value="pyramid">Pyramid</option>
+        <option value="twistedColumn">Twisted column</option>
       </select>
     </div>
     <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
@@ -402,6 +403,101 @@ function makeCylinderY(cx, cy0, cy1, cz, r) {
   };
 }
 
+// ============================================================
+// Tier 2: domain operators. Each wraps a base SDF and returns a new SDF.
+// ============================================================
+
+// 3-D smoothstep value-noise factory. Returns f(x, y, z) ∈ [0, 1].
+function makeNoise3D(seedKey) {
+  const rng = makeRng(seedKey);
+  const GS = 32;
+  const grid = new Float32Array(GS * GS * GS);
+  for (let i = 0; i < grid.length; i++) grid[i] = rng();
+  function idx3(x, y, z) {
+    return (x % GS) + (y % GS) * GS + (z % GS) * GS * GS;
+  }
+  return function n3(x, y, z) {
+    const ux = ((x % GS) + GS) % GS;
+    const uy = ((y % GS) + GS) % GS;
+    const uz = ((z % GS) + GS) % GS;
+    const ix = Math.floor(ux), iy = Math.floor(uy), iz = Math.floor(uz);
+    const fx = ux - ix, fy = uy - iy, fz = uz - iz;
+    const sx = fx * fx * (3 - 2 * fx);
+    const sy = fy * fy * (3 - 2 * fy);
+    const sz = fz * fz * (3 - 2 * fz);
+    const c000 = grid[idx3(ix,     iy,     iz    )];
+    const c100 = grid[idx3(ix + 1, iy,     iz    )];
+    const c010 = grid[idx3(ix,     iy + 1, iz    )];
+    const c110 = grid[idx3(ix + 1, iy + 1, iz    )];
+    const c001 = grid[idx3(ix,     iy,     iz + 1)];
+    const c101 = grid[idx3(ix + 1, iy,     iz + 1)];
+    const c011 = grid[idx3(ix,     iy + 1, iz + 1)];
+    const c111 = grid[idx3(ix + 1, iy + 1, iz + 1)];
+    const x00 = c000 + (c100 - c000) * sx;
+    const x10 = c010 + (c110 - c010) * sx;
+    const x01 = c001 + (c101 - c001) * sx;
+    const x11 = c011 + (c111 - c011) * sx;
+    const y0 = x00 + (x10 - x00) * sy;
+    const y1 = x01 + (x11 - x01) * sy;
+    return y0 + (y1 - y0) * sz;
+  };
+}
+
+// Surface displacement: roughen a smooth SDF by adding noise to its value.
+// `noiseFn` is expected in [0, 1]; it's centered before applying.
+// `amp` is the peak-to-peak displacement amplitude (≤ ~0.2 for raymarch
+// stability — large amps make the SDF non-Lipschitz and the raymarcher
+// overshoots).
+function displace(sdf, noiseFn, amp) {
+  return function (x, y, z) {
+    return sdf(x, y, z) + (noiseFn(x, y, z) - 0.5) * amp;
+  };
+}
+
+// Rotate the input position around the Y axis by `k * y` radians before
+// evaluating — twists any vertical form into a helix.
+function twistY(sdf, k) {
+  return function (x, y, z) {
+    const c = Math.cos(k * y), s = Math.sin(k * y);
+    return sdf(x * c - z * s, y, x * s + z * c);
+  };
+}
+
+// Cheap-bend (Inigo Quilez): rotate the xy plane by `k * y` before
+// evaluating. Turns a straight column into a curve / hook.
+function bendY(sdf, k) {
+  return function (x, y, z) {
+    const c = Math.cos(k * y), s = Math.sin(k * y);
+    return sdf(c * x - s * y, s * x + c * y, z);
+  };
+}
+
+// Mirror around the given axis ('x' | 'y' | 'z') — instant bilateral
+// symmetry. The half-SDF you define on the +axis side gets reflected.
+function mirror(sdf, axis) {
+  if (axis === 'x') return (x, y, z) => sdf(Math.abs(x), y, z);
+  if (axis === 'y') return (x, y, z) => sdf(x, Math.abs(y), z);
+  return (x, y, z) => sdf(x, y, Math.abs(z));
+}
+
+// Domain repetition. `period` is an [x, y, z] array; pass 0 on an axis to
+// disable repetition there. Each query point gets wrapped into the
+// [-p/2, p/2] cell before evaluating the underlying SDF.
+function repeat(sdf, period) {
+  return function (x, y, z) {
+    if (period[0] > 0) {
+      const p = period[0]; x = x - p * Math.floor((x + p / 2) / p);
+    }
+    if (period[1] > 0) {
+      const p = period[1]; y = y - p * Math.floor((y + p / 2) / p);
+    }
+    if (period[2] > 0) {
+      const p = period[2]; z = z - p * Math.floor((z + p / 2) / p);
+    }
+    return sdf(x, y, z);
+  };
+}
+
 // X-axis-aligned capsule — useful as a "tunnel" carver to punch a
 // horizontal arch through a rock. (Hvítserkur-style.)
 function makeCapsuleX(cx, cy, cz, halfLen, r) {
@@ -507,10 +603,8 @@ const SCENES = {
     };
   },
   iceberg: function (rng, state) {
-    // Two blobs softly merged: a small pointed tip above the waterline
-    // and a much larger rounded body sitting at-and-below the horizon.
-    // The horizon line naturally falls through the join, producing the
-    // iconic "small tip / massive base" iceberg silhouette.
+    // Tip + base softly merged, then surface-roughened with 3-D fBm noise
+    // to break the smooth-blob silhouette into jagged ice facets.
     const tip = makeBlobSDFAt(rng, {
       center: [0.08, 0.32, 0],
       nSpheres: 3,
@@ -529,7 +623,25 @@ const SCENES = {
       pointiness: 0,
       scale: 0.7
     });
-    return sdfUnion([tip, base], 0.22);
+    const smoothBerg = sdfUnion([tip, base], 0.22);
+    // Two-octave noise for ice character: low frequency for big facets,
+    // high frequency for crystalline grain.
+    const n3 = makeNoise3D(state.seed + ':icebergNoise');
+    function jagged(x, y, z) {
+      return 0.65 * n3(x * 4, y * 4, z * 4) +
+             0.35 * n3(x * 11, y * 11, z * 11);
+    }
+    return displace(smoothBerg, jagged, 0.09);
+  },
+  twistedColumn: function (rng, state) {
+    // Tall slab bent into a helix by twistY. Demonstrates the new
+    // operator; pairs well with the basket-weave-style hatching on the
+    // resulting curved surface.
+    const slab = makeBox(0, 0, 0, 0.42, 0.85, 0.16);
+    return {
+      sdf: twistY(slab, 2.6),
+      camera: { tiltDeg: 6, yawDeg: 18 }
+    };
   }
 };
 
