@@ -70,6 +70,9 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="revolutionProfile">Revolution profile (urn)</option>
+        <option value="polyhedron">Polyhedron (octahedron)</option>
+        <option value="astronaut">Astronaut on a tiny planet</option>
         <option value="engineBlock">Engine block</option>
         <option value="sailboat">Sailboat</option>
         <option value="animal">Animal (rabbit)</option>
@@ -441,6 +444,16 @@ function makeSphere(cx, cy, cz, r) {
   return function (x, y, z) {
     const dx = x - cx, dy = y - cy, dz = z - cz;
     return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  };
+}
+
+// Regular octahedron centred at (cx, cy, cz). `s` controls overall size —
+// the inscribed sphere has radius s × sqrt(1/3). This is the L1-ball
+// distance approximation; not a perfect Euclidean SDF, but accurate
+// enough for raymarched silhouette rendering.
+function makeOctahedron(cx, cy, cz, s) {
+  return function (x, y, z) {
+    return (Math.abs(x - cx) + Math.abs(y - cy) + Math.abs(z - cz) - s) * 0.5774;
   };
 }
 
@@ -895,6 +908,34 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  revolutionProfile: function (rng, state) {
+    // Classical urn revolved around Y. Profile in (r, y):
+    // wide foot ring → narrow stem → fat belly → narrow neck → flared lip.
+    const profile = sdfUnion([
+      box2D(0.10, -0.42, 0.10, 0.020, 0.012),
+      box2D(0.055, -0.36, 0.055, 0.040, 0.012),
+      circle2D(0.16, -0.05, 0.18),
+      box2D(0.055, 0.20, 0.055, 0.060, 0.012),
+      box2D(0.11, 0.30, 0.11, 0.022, 0.012)
+    ], 0.040);
+    return { sdf: revolveY(profile), camera: { tiltDeg: 8 } };
+  },
+  polyhedron: function (rng, state) {
+    // Single octahedron viewed off-axis so all three diamond faces are visible.
+    return { sdf: makeOctahedron(0, 0.15, 0, 0.32), camera: { tiltDeg: 14, yawDeg: 22 } };
+  },
+  astronaut: function (rng, state) {
+    // Tiny planet: large sphere centred well below the frame so only
+    // its top crown shows. Small figure standing on top.
+    const planet = makeSphere(0, -1.00, 0, 0.95);
+    const legs = makeCylinderY(0, -0.05, 0.05, 0, 0.040);
+    const torso = makeSphere(0, 0.07, 0, 0.050);
+    const helmet = makeSphere(0, 0.13, 0, 0.045);
+    return {
+      sdf: sdfUnion([planet, legs, torso, helmet], 0.012),
+      camera: { tiltDeg: 14 }
+    };
   },
   engineBlock: function (rng, state) {
     // V-style engine block silhouette: chunky main block + two valve
