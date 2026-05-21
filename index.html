@@ -70,6 +70,10 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="containerTower">Container tower</option>
+        <option value="floatingIsland">Floating island</option>
+        <option value="cargoShips">Cargo ships</option>
+        <option value="objectOnRails">Object on rails</option>
         <option value="dustCloud">Dust cloud</option>
         <option value="eroded">Eroded structure</option>
         <option value="cliff">Cliff face</option>
@@ -882,6 +886,65 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  containerTower: function (rng, state) {
+    // Stacked cargo containers, alternating left/right with slight
+    // outward stagger so the silhouette zig-zags upward.
+    return stack(function (i) {
+      const y = -0.30 + i * 0.13;
+      const shift = ((i % 2 === 0) ? 1 : -1) * (0.05 + i * 0.008);
+      const w = 0.30 - i * 0.005;
+      return makeBox(shift, y, 0, w, 0.055, 0.15, 0.008);
+    }, 7, 0);
+  },
+  floatingIsland: function (rng, state) {
+    // A blob lifted above the horizon, with four tapered roots
+    // dangling from its underside.
+    const island = makeBlobSDFAt(rng, {
+      center: [0, 0.28, 0],
+      nSpheres: 4,
+      smoothK: 0.30,
+      spread: 0.70,
+      verticality: 0.55,
+      pointiness: 0,
+      scale: 0.42
+    });
+    const parts = [island];
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + 0.35;
+      const x = Math.cos(a) * 0.08;
+      const z = Math.sin(a) * 0.06;
+      const len = 0.22 + rng() * 0.20;
+      // Cone apex (point) at bottom, base (wide) at island junction.
+      parts.push(makeConeY(x, 0.10 - len, 0.10, z, 0.022));
+    }
+    return sdfUnion(parts, 0.04);
+  },
+  cargoShips: function (rng, state) {
+    // A receding line of cargo silhouettes — Industrial Devolution motif.
+    // Each successive ship shifts back in z and shrinks; smaller boxes
+    // on top read as superstructure / cranes.
+    const ships = [];
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+      const x = -0.55 + i * 0.28;
+      const z = i * 0.12;
+      const w = 0.11 - i * 0.012;
+      const h = 0.06 - i * 0.008;
+      const yBase = -0.06 + i * 0.005;
+      ships.push(makeBox(x, yBase, z, w, h, w * 0.6, 0.005));
+      ships.push(makeBox(x + w * 0.35, yBase + h, z, w * 0.25, h * 0.7, w * 0.4));
+    }
+    return sdfUnion(ships, 0);
+  },
+  objectOnRails: function (rng, state) {
+    // Two parallel rails (capsules along z) plus a single block sitting
+    // on them — the rails go into the distance, the subject reads as
+    // a railcar or cargo cube parked off-center on the line.
+    const rail1 = makeCapsuleZ(-0.08, -0.10, 0, 0.55, 0.012);
+    const rail2 = makeCapsuleZ( 0.08, -0.10, 0, 0.55, 0.012);
+    const subject = makeBox(0, 0.06, -0.08, 0.11, 0.18, 0.10, 0.015);
+    return sdfUnion([rail1, rail2, subject], 0.02);
   },
   dustCloud: function (rng, state) {
     // Low, wide ground-level mass of many overlapping smooth-min'd spheres.
