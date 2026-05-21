@@ -777,6 +777,19 @@ function rayMarch(sdf, ox, oy, oz, dx, dy, dz, tMax) {
   }
   return -1;
 }
+
+// Cast a shadow ray from a near-surface point toward the light direction L.
+// Returns 1 if another SDF surface blocks the ray before maxT, else 0.
+function isShadowed(sdf, x, y, z, L, maxT) {
+  let t = 0.008;
+  for (let i = 0; i < 48; i++) {
+    const d = sdf(x + L[0] * t, y + L[1] * t, z + L[2] * t);
+    if (d < 0.001) return 1;
+    t += Math.max(d, 0.006);
+    if (t > maxT) return 0;
+  }
+  return 0;
+}
 function normalAt(sdf, x, y, z) {
   const e = 0.0009;
   const nx = sdf(x + e, y, z) - sdf(x - e, y, z);
@@ -812,7 +825,8 @@ function renderSceneBuffer(state, sdf) {
     nx: new Float32Array(N), ny: new Float32Array(N), nz: new Float32Array(N),
     light: new Float32Array(N),
     depth: new Float32Array(N),
-    primary: new Uint8Array(N)
+    primary: new Uint8Array(N),
+    shadow: new Uint8Array(N)    // 1 if occluded from the light source
   };
 
   let lL = Math.hypot(state.lx, state.ly, state.lz) || 1;
@@ -846,6 +860,16 @@ function renderSceneBuffer(state, sdf) {
       buf.depth[idx] = t;
       const ld = Math.max(0, n[0] * L[0] + n[1] * L[1] + n[2] * L[2]);
       buf.light[idx] = 0.15 + 0.85 * ld;
+
+      // Shadow ray for blob hits only — ground is a half-space so its
+      // shadow check is well-served by separate logic if we want it later.
+      // Skip when ld <= 0 (back-facing surface, already in self-shadow).
+      if (hit === 1 && ld > 0) {
+        const hx = CAM[0] + dx * t + n[0] * 0.004;
+        const hy = CAM[1] + dy * t + n[1] * 0.004;
+        const hz = CAM[2] + dz * t + n[2] * 0.004;
+        buf.shadow[idx] = isShadowed(sdf, hx, hy, hz, L, 8);
+      }
 
       // Per-pixel "primary" hatch angle = perpendicular to projected normal.
       // For very face-on regions (small projected normal), the angle is
@@ -886,9 +910,12 @@ function shouldDrawAt(buf, sx, sy, angleIdx) {
   const pri = buf.primary[idx];
   if (angleIdx === pri) return true;
 
-  // Blob: tiered crosshatch by offset from primary.
+  // Blob: tiered crosshatch by offset from primary. Cast shadow pushes
+  // the effective darkness up, so shadowed regions reach further
+  // crosshatch tiers than their Lambert lighting alone would.
   const offset = (angleIdx - pri + 4) % 4;
-  const darkness = 1 - buf.light[idx];
+  let darkness = 1 - buf.light[idx];
+  if (buf.shadow[idx]) darkness = Math.min(1, darkness + 0.35);
   const T = [0, 0.30, 0.55, 0.78];
   return darkness > T[offset];
 }
