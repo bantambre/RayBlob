@@ -63,6 +63,10 @@
         <option value="sphereWithHole">Sphere with hole</option>
         <option value="bridge">Bridge</option>
         <option value="drop">Liquid drop</option>
+        <option value="tessellation">Tessellation field</option>
+        <option value="skyline">Skyline</option>
+        <option value="metaballs">Floating metaballs</option>
+        <option value="platforms">Hovering platforms</option>
       </select>
     </div>
     <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
@@ -867,6 +871,52 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  tessellation: function (rng, state) {
+    // Grid of tall thin boxes tiled across the xz plane via repeat.
+    // A plane carve removes everything in front of the camera so the
+    // nearest column of cells doesn't block the view.
+    const cell = makeBox(0, -0.4, 0, 0.06, 0.3, 0.06);
+    const field = repeat(cell, [0.32, 0, 0.32]);
+    const cullFront = makePlane(0, 0, 1, 0.2);
+    return sdfSubtract(field, [cullFront]);
+  },
+  skyline: function (rng, state) {
+    // Row of rectangular buildings of varied heights with slight
+    // depth jitter — urban analog of Monoliths.
+    const buildings = stack(function (i) {
+      const cx = -0.85 + i * 0.21;
+      const cz = (rng() - 0.5) * 0.15 - 0.05;
+      const w  = 0.07 + rng() * 0.04;
+      const h  = 0.18 + rng() * 0.50;
+      const cy = -0.70 + h;
+      return makeBox(cx, cy, cz, w, h, w * 0.7, 0.005);
+    }, 9, 0);
+    return buildings;
+  },
+  metaballs: function (rng, state) {
+    // Several spheres smooth-min'd together — direct test of smoothK
+    // as the visual protagonist.
+    const balls = stack(function (i) {
+      const cx = (rng() - 0.5) * 0.7;
+      const cy = -0.15 + rng() * 0.55;
+      const cz = (rng() - 0.5) * 0.35;
+      const r  = 0.14 + rng() * 0.09;
+      return makeSphere(cx, cy, cz, r);
+    }, 5, 0.30);
+    return balls;
+  },
+  platforms: function (rng, state) {
+    // Several thin discs floating at varied heights — Magritte
+    // floating-island composition without literal landscape.
+    const platforms = stack(function (i) {
+      const cx = (rng() - 0.5) * 0.9;
+      const cy = -0.15 + i * 0.17;
+      const cz = (rng() - 0.5) * 0.5;
+      const r  = 0.17 + rng() * 0.10;
+      return makeCylinderY(cx, cy - 0.02, cy + 0.02, cz, r);
+    }, 5, 0);
+    return platforms;
   },
   bentRod: function (rng, state) {
     // Single tall cylinder run through bendY — curves into a hook.
