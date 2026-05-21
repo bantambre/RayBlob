@@ -70,6 +70,11 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="cacti">Cacti</option>
+        <option value="megaliths">Megaliths</option>
+        <option value="ufoLandscape">UFO over landscape</option>
+        <option value="hand">Hand</option>
+        <option value="wireframeLattice">Wireframe lattice</option>
         <option value="containerTower">Container tower</option>
         <option value="floatingIsland">Floating island</option>
         <option value="cargoShips">Cargo ships</option>
@@ -886,6 +891,96 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  cacti: function (rng, state) {
+    // Saguaros: trunk + two upward-bent arms each. Arms are an L of a
+    // horizontal capsule (the elbow) and a vertical cylinder (the
+    // forearm rising up).
+    function saguaro(x, z, topY, scale) {
+      const groundY = -0.45;
+      const trunkR = 0.038 * scale;
+      const armR = 0.024 * scale;
+      const armSpan = 0.07 * scale;
+      const trunk = makeCylinderY(x, groundY, topY, z, trunkR);
+      const armRY = topY - 0.20 * scale;
+      const armLY = topY - 0.28 * scale;
+      const armRH = makeCapsuleX(x + armSpan * 0.7, armRY, z, armSpan, armR);
+      const armRV = makeCylinderY(x + armSpan * 1.4, armRY, armRY + 0.18 * scale, z, armR);
+      const armLH = makeCapsuleX(x - armSpan * 0.7, armLY, z, armSpan, armR);
+      const armLV = makeCylinderY(x - armSpan * 1.4, armLY, armLY + 0.14 * scale, z, armR);
+      return sdfUnion([trunk, armRH, armRV, armLH, armLV], 0.022);
+    }
+    return sdfUnion([
+      saguaro(-0.32, -0.04, 0.30, 1.00),
+      saguaro( 0.05,  0.08, 0.18, 0.85),
+      saguaro( 0.40,  0.20, 0.10, 0.70)
+    ], 0);
+  },
+  megaliths: function (rng, state) {
+    // Stonehenge ring: 9 stones placed on a foreshortened ellipse so
+    // the back of the circle compresses behind the front.
+    const stones = [];
+    const n = 9;
+    const radius = 0.42;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + 0.15;
+      const x = Math.cos(a) * radius;
+      const z = Math.sin(a) * radius * 0.55;
+      const h = 0.16 + rng() * 0.08;
+      stones.push(makeBox(x, -0.30 + h, z, 0.05, h, 0.04, 0.008));
+    }
+    return sdfUnion(stones, 0);
+  },
+  ufoLandscape: function (rng, state) {
+    // UFO saucer hovering above a wide rocky ridge.
+    const disc = box2D(0, 0.30, 0.40, 0.04, 0.025);
+    const dome = circle2D(0, 0.39, 0.12);
+    const saucer = revolveY(sdfUnion([disc, dome], 0.03));
+    const ridge = makeBlobSDFAt(rng, {
+      center: [0, -0.30, 0],
+      nSpheres: 4,
+      smoothK: 0.40,
+      spread: 1.3,
+      verticality: 0.5,
+      pointiness: 0.4,
+      scale: 0.45
+    });
+    return sdfUnion([saucer, ridge], 0);
+  },
+  hand: function (rng, state) {
+    // Palm + 4 fingers (varied length: middle longest) + thumb.
+    // The arm rises from below the frame as a thicker cylinder.
+    const arm = makeCylinderY(0, -0.55, -0.10, 0, 0.08);
+    const palm = makeBox(0, -0.05, 0, 0.14, 0.10, 0.06, 0.025);
+    const f1 = makeCylinderY(-0.085, 0.04, 0.20, 0, 0.022); // index
+    const f2 = makeCylinderY(-0.028, 0.04, 0.26, 0, 0.022); // middle
+    const f3 = makeCylinderY( 0.028, 0.04, 0.24, 0, 0.022); // ring
+    const f4 = makeCylinderY( 0.085, 0.04, 0.18, 0, 0.022); // pinky
+    const thumb = makeCylinderY(-0.16, -0.04, 0.10, 0, 0.025);
+    return sdfUnion([arm, palm, thumb, f1, f2, f3, f4], 0.035);
+  },
+  wireframeLattice: function (rng, state) {
+    // 3³ regular lattice of points connected by thin cylindrical edges
+    // along each of the three axes — 27 primitives.
+    const parts = [];
+    const step = 0.16;
+    const r = 0.006;
+    for (let iy = 0; iy < 3; iy++) {
+      for (let iz = 0; iz < 3; iz++) {
+        parts.push(makeCapsuleX(0, -step + iy * step, -step + iz * step, step, r));
+      }
+    }
+    for (let ix = 0; ix < 3; ix++) {
+      for (let iz = 0; iz < 3; iz++) {
+        parts.push(makeCylinderY(-step + ix * step, -step, step, -step + iz * step, r));
+      }
+    }
+    for (let ix = 0; ix < 3; ix++) {
+      for (let iy = 0; iy < 3; iy++) {
+        parts.push(makeCapsuleZ(-step + ix * step, -step + iy * step, 0, step, r));
+      }
+    }
+    return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 18, yawDeg: 28 } };
   },
   containerTower: function (rng, state) {
     // Stacked cargo containers, alternating left/right with slight
