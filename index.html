@@ -70,6 +70,10 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="engineBlock">Engine block</option>
+        <option value="sailboat">Sailboat</option>
+        <option value="animal">Animal (rabbit)</option>
+        <option value="escalators">Escalators</option>
         <option value="cacti">Cacti</option>
         <option value="megaliths">Megaliths</option>
         <option value="ufoLandscape">UFO over landscape</option>
@@ -891,6 +895,53 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  engineBlock: function (rng, state) {
+    // V-style engine block silhouette: chunky main block + two valve
+    // covers along the top + a central intake stack + exhaust pipes
+    // off either side.
+    const groundY = -0.35;
+    const blockH = 0.16;
+    const block = makeBox(0, groundY + blockH, 0, 0.30, blockH, 0.18, 0.022);
+    const parts = [block];
+    const topY = groundY + 2 * blockH;
+    parts.push(makeBox(-0.10, topY + 0.04, 0, 0.13, 0.045, 0.07, 0.012));
+    parts.push(makeBox( 0.10, topY + 0.04, 0, 0.13, 0.045, 0.07, 0.012));
+    parts.push(makeCapsuleX( 0.20, groundY + 0.08, 0.16, 0.09, 0.020));
+    parts.push(makeCapsuleX(-0.20, groundY + 0.08, 0.16, 0.09, 0.020));
+    parts.push(makeCylinderY(0, topY + 0.09, topY + 0.25, 0, 0.030));
+    return sdfUnion(parts, 0.012);
+  },
+  sailboat: function (rng, state) {
+    // Hull + mast + rectangular sail. Without rotation operators the
+    // sail reads as a tall rectangle rather than a triangle — still
+    // recognisable as a sailboat with the waves ground style.
+    const hull = makeBox(0.04, -0.10, 0, 0.16, 0.040, 0.06, 0.025);
+    const mast = makeCylinderY(0.02, -0.06, 0.30, 0, 0.008);
+    const sail = makeBox(0.06, 0.14, 0, 0.10, 0.16, 0.005, 0.003);
+    return sdfUnion([hull, mast, sail], 0.012);
+  },
+  animal: function (rng, state) {
+    // Sitting rabbit silhouette: round body + smaller head + two
+    // upright ears + small tail. Iconic enough to read at a glance.
+    const body = makeSphere(0, -0.15, 0, 0.16);
+    const head = makeSphere(0.08, 0.05, 0.02, 0.10);
+    const earL = makeCylinderY(0.04, 0.10, 0.30, 0, 0.022);
+    const earR = makeCylinderY(0.12, 0.10, 0.32, 0, 0.022);
+    const tail = makeSphere(-0.15, -0.10, 0.02, 0.04);
+    return sdfUnion([body, head, earL, earR, tail], 0.04);
+  },
+  escalators: function (rng, state) {
+    // Diagonal stair of small boxes ascending to the right — the
+    // staircase silhouette of a single escalator.
+    const parts = [];
+    const n = 20;
+    for (let i = 0; i < n; i++) {
+      const x = -0.45 + i * 0.05;
+      const y = -0.30 + i * 0.045;
+      parts.push(makeBox(x, y, 0, 0.03, 0.022, 0.08, 0.004));
+    }
+    return sdfUnion(parts, 0);
   },
   cacti: function (rng, state) {
     // Saguaros: trunk + two upward-bent arms each. Arms are an L of a
