@@ -67,6 +67,9 @@
         <option value="skyline">Skyline</option>
         <option value="metaballs">Floating metaballs</option>
         <option value="platforms">Hovering platforms</option>
+        <option value="twinTowers">Twin towers</option>
+        <option value="crackedSphere">Cracked sphere</option>
+        <option value="doorway">Doorway</option>
       </select>
     </div>
     <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
@@ -871,6 +874,34 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  twinTowers: function (rng, state) {
+    // Single tower at +x, mirrored across x to produce a symmetric
+    // pair with a clear negative space between them.
+    const halfTower = makeBlobSDFAt(rng, {
+      center: [0.40, 0.05, 0],
+      nSpheres: 3,
+      smoothK: 0.18,
+      spread: 0.32,
+      verticality: 2.0,
+      pointiness: 0.35,
+      scale: 0.42
+    });
+    return mirror(halfTower, 'x');
+  },
+  crackedSphere: function (rng, state) {
+    // Solid sphere with a tilted plane subtracted to reveal an
+    // angled flat face. The cut creates an obvious slice plane.
+    const sphere = makeSphere(0, 0.12, 0, 0.50);
+    const cut = makePlane(0.3, 0.25, -0.92, 0.04);
+    return sdfSubtract(sphere, [cut]);
+  },
+  doorway: function (rng, state) {
+    // Heavy wall with a rounded archway carved through (Z-axis
+    // capsule = hole going front-to-back so the camera sees through).
+    const wall = makeBox(0, 0.02, 0, 0.55, 0.55, 0.12);
+    const opening = makeCapsuleZ(0, -0.16, 0, 0.5, 0.22);
+    return sdfSubtract(wall, [opening]);
   },
   tessellation: function (rng, state) {
     // Grid of tall thin boxes tiled across the xz plane via repeat.
