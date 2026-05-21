@@ -61,6 +61,13 @@
     <div class="field"><label>Pointiness</label><input id="pointiness" type="number" min="0" max="2.0" step="0.1" value="0"></div>
     <div class="field"><label>Smoothing k</label><input id="smoothK" type="number" min="0.05" max="0.8" step="0.05" value="0.3"></div>
     <div class="field"><label>Cam tilt (°)</label><input id="camTilt" type="number" min="0" max="20" step="0.5" value="6"></div>
+    <div class="field"><label>Ground style</label>
+      <select id="groundStyle"
+              style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
+        <option value="perspective" selected>Perspective</option>
+        <option value="waves">Waves</option>
+      </select>
+    </div>
     <div class="field"><label>Sky style</label>
       <select id="skyStyle"
               style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
@@ -845,6 +852,57 @@ function generateHatches(state, buf) {
 // Stepping ground_z by a constant amount produces sy steps that shrink
 // toward the horizon — the perspective compression we want.
 // ============================================================
+// Wave-style ground: same perspective spacing as the perspective lines,
+// but each scan line is displaced by 2-D noise (two octaves) so it
+// undulates. Wave amplitude tapers to zero at the horizon (perspective).
+// Driven by `state.waviness`.
+function generateGroundWaves(state, buf) {
+  const paths = [];
+  const sampleStep = 0.005;
+  const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
+  const minDsy = Math.max(state.lw * WORLD_PER_MM * 2.0, 0.006);
+  const fullRange = syHorizon - SY_MIN;
+  if (fullRange <= 0) return paths;
+
+  const wave2D = makeNoise2D(state.seed + ':groundWaves');
+  // Amplitude scales with both the waviness slider and the squared
+  // distance-from-horizon factor so far waves are tiny, near ones bold.
+  const ampBase = 0.06 * (state.waviness || 1);
+
+  let sy = SY_MIN;
+  const stopAt = syHorizon;
+  while (sy < stopAt) {
+    const d = (syHorizon - sy) / fullRange;       // 1 at bottom → 0 at horizon
+    const step = minDsy + (maxDsy - minDsy) * d * d;
+    const amp = ampBase * d * d;
+
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      // Two-octave noise centred on 0.5 → centred on 0 after subtraction
+      // → ±1 range after the *2. Multiplied by amp gives final displacement.
+      const oct1 = wave2D(sx * 5 + sy * 3, sy * 9)  - 0.5;
+      const oct2 = wave2D(sx * 13 + sy * 7, sy * 21) - 0.5;
+      const wave = (oct1 * 0.7 + oct2 * 0.3) * 2;
+      const wavySy = sy + wave * amp;
+
+      const idx = bufIdx(buf, sx, wavySy);
+      const onGround = (idx >= 0 && buf.surface[idx] === 2);
+      if (onGround) {
+        polyline.push([sx, wavySy]);
+      } else {
+        flush();
+      }
+    }
+    flush();
+    sy += step;
+  }
+  return paths;
+}
+
 function generateGroundHatches(state, buf) {
   // Iterate sy DIRECTLY (not via z) with a smoothly shrinking step.
   // This avoids the "skip 1 every N" alternation pattern of the previous
@@ -1714,6 +1772,7 @@ function readState() {
     smoothK: clampFloat(document.getElementById('smoothK').value, 0.05, 0.8, 0.3),
     camTilt: clampFloat(document.getElementById('camTilt').value, 0, 20, 6),
     skyStyle: document.getElementById('skyStyle').value,
+    groundStyle: document.getElementById('groundStyle').value,
     waviness: clampFloat(document.getElementById('waviness').value, 0, 8, 3.0),
     cloudThreshold: clampFloat(document.getElementById('cloudThreshold').value, 0.3, 0.8, 0.5),
     lw: clampFloat(document.getElementById('lw').value, 0.05, 2.0, 0.3),
@@ -1738,7 +1797,7 @@ function tick() { return new Promise(r => setTimeout(r, 0)); }
 function syncFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const keys = ['seed','scene','lw','density','nSpheres','spread','verticality',
-                'pointiness','smoothK','camTilt','skyStyle','waviness',
+                'pointiness','smoothK','camTilt','skyStyle','groundStyle','waviness',
                 'cloudThreshold','bufRes','lx','ly','lz'];
   for (const k of keys) {
     if (params.has(k)) document.getElementById(k).value = params.get(k);
@@ -1747,7 +1806,7 @@ function syncFromUrl() {
 function writeUrl(state) {
   const params = new URLSearchParams();
   for (const k of ['seed','scene','lw','density','nSpheres','spread','verticality',
-                   'pointiness','smoothK','camTilt','skyStyle','waviness',
+                   'pointiness','smoothK','camTilt','skyStyle','groundStyle','waviness',
                    'cloudThreshold']) {
     params.set(k, state[k]);
   }
@@ -1793,7 +1852,9 @@ async function doRender() {
     setStatus('Generating hatches…');
     await tick();
     const blob = generateHatches(state, buf);
-    const ground = generateGroundHatches(state, buf);
+    const ground = (state.groundStyle === 'waves')
+      ? generateGroundWaves(state, buf)
+      : generateGroundHatches(state, buf);
     let sky;
     switch (state.skyStyle) {
       case 'wobbly':        sky = generateCloudsWobbly(state, buf); break;
