@@ -70,6 +70,10 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="dustCloud">Dust cloud</option>
+        <option value="eroded">Eroded structure</option>
+        <option value="cliff">Cliff face</option>
+        <option value="tornado">Tornado</option>
         <option value="mirroredForm">Mirrored form</option>
         <option value="mountains">Mountains</option>
         <option value="stepwell">Stepwell</option>
@@ -878,6 +882,49 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  dustCloud: function (rng, state) {
+    // Low, wide ground-level mass of many overlapping smooth-min'd spheres.
+    // Reads as a settled sandstorm / explosion aftermath / fog bank.
+    return stack(function (i) {
+      const angle = (i / 14) * Math.PI * 2 + rng() * 0.4;
+      const radius = 0.10 + rng() * 0.55;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius * 0.55;
+      const y = -0.05 + rng() * 0.18;
+      const r = 0.09 + rng() * 0.10;
+      return makeSphere(x, y, z, r);
+    }, 14, 0.20);
+  },
+  eroded: function (rng, state) {
+    // A hard block roughened all over by 3-D value noise — reads as a
+    // weathered ruin / sandstone tower / eroded sea-stack.
+    const block = makeBox(0, 0.10, 0, 0.32, 0.40, 0.22, 0.03);
+    const n3 = makeNoise3D(state.seed + ':erodeNoise');
+    function rough(x, y, z) {
+      return 0.55 * n3(x * 5,  y * 5,  z * 5) +
+             0.30 * n3(x * 13, y * 13, z * 13) +
+             0.15 * n3(x * 30, y * 30, z * 30);
+    }
+    return displace(block, rough, 0.10);
+  },
+  cliff: function (rng, state) {
+    // Wide vertical wall with noise displaced into vertical streaks
+    // (high frequency in xz, low in y) so it reads as columnar
+    // weathering rather than a bumpy box.
+    const wall = makeBox(0, 0.15, 0, 0.60, 0.45, 0.10, 0.03);
+    const n3 = makeNoise3D(state.seed + ':cliffNoise');
+    function striated(x, y, z) {
+      return 0.70 * n3(x * 9,  y * 2, z * 9) +
+             0.30 * n3(x * 24, y * 5, z * 24);
+    }
+    return displace(wall, striated, 0.08);
+  },
+  tornado: function (rng, state) {
+    // Downward-apex cone (wide at top, point at ground), then twisted
+    // around y so the silhouette spirals — funnel cloud.
+    const funnel = makeConeY(0, -0.50, 0.55, 0, 0.22);
+    return twistY(funnel, 5.2);
   },
   mirroredForm: function (rng, state) {
     // A blob with its perfect reflection across the y=0 plane —
