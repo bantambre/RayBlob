@@ -70,6 +70,10 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="mirroredForm">Mirrored form</option>
+        <option value="mountains">Mountains</option>
+        <option value="stepwell">Stepwell</option>
+        <option value="smoke">Smoke column</option>
       </select>
     </div>
     <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
@@ -874,6 +878,60 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  mirroredForm: function (rng, state) {
+    // A blob with its perfect reflection across the y=0 plane —
+    // mirror(_, 'y') substitutes |y| so the shape is reflected.
+    // The horizon naturally falls through the axis of symmetry.
+    const subject = makeBlobSDFAt(rng, {
+      center: [0, 0.3, 0],
+      nSpheres: 4,
+      smoothK: 0.25,
+      spread: 0.55,
+      verticality: 1.1,
+      pointiness: 0.55,
+      scale: 0.38
+    });
+    return mirror(subject, 'y');
+  },
+  mountains: function (rng, state) {
+    // Three ridges at varied z depths and lateral offsets, soft-merged.
+    const ridges = stack(function (i) {
+      const z = -0.35 + i * 0.55;
+      const cx = (rng() - 0.5) * 0.4;
+      return makeBlobSDFAt(rng, {
+        center: [cx, -0.10 - i * 0.05, z],
+        nSpheres: 5,
+        smoothK: 0.4,
+        spread: 1.5,
+        verticality: 0.7,
+        pointiness: 0.6,
+        scale: 0.50 - i * 0.08
+      });
+    }, 3, 0.15);
+    return ridges;
+  },
+  stepwell: function (rng, state) {
+    // Descending series of square boxes — widest at top, narrowing
+    // as you go down (Chand Baori style).
+    return stack(function (i) {
+      const y = -0.05 - i * 0.13;
+      const hw = 0.55 - i * 0.08;
+      return makeBox(0, y, 0, hw, 0.06, hw, 0.004);
+    }, 5, 0);
+  },
+  smoke: function (rng, state) {
+    // Vertical column of stacked spheres that widen with height,
+    // smooth-merged into a continuous form, then twisted slightly
+    // around y for organic motion.
+    const column = stack(function (i) {
+      const y = -0.35 + i * 0.16;
+      const r = 0.07 + i * 0.038;
+      const cx = (rng() - 0.5) * 0.04 * (i + 1);
+      const cz = (rng() - 0.5) * 0.03 * (i + 1);
+      return makeSphere(cx, y, cz, r);
+    }, 9, 0.10);
+    return twistY(column, 1.2);
   },
   twinTowers: function (rng, state) {
     // Single tower at +x, mirrored across x to produce a symmetric
