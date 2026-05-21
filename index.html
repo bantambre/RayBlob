@@ -59,6 +59,10 @@
         <option value="forest">Forest</option>
         <option value="balloons">Hot air balloons</option>
         <option value="volcano">Volcano</option>
+        <option value="bentRod">Bent rod</option>
+        <option value="sphereWithHole">Sphere with hole</option>
+        <option value="bridge">Bridge</option>
+        <option value="drop">Liquid drop</option>
       </select>
     </div>
     <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
@@ -863,6 +867,37 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  bentRod: function (rng, state) {
+    // Single tall cylinder run through bendY — curves into a hook.
+    const rod = makeCylinderY(0, -0.55, 0.65, 0, 0.08);
+    return {
+      sdf: bendY(rod, 1.4),
+      camera: { tiltDeg: 5, yawDeg: 12 }
+    };
+  },
+  sphereWithHole: function (rng, state) {
+    // Pasma tutorial classic: solid sphere with a cylindrical tunnel
+    // carved straight through. Plane carve + sphere + capsule.
+    const sphere = makeSphere(0, 0.18, 0, 0.50);
+    const hole = makeCapsuleZ(0, 0.18, 0, 0.8, 0.18);
+    return {
+      sdf: sdfSubtract(sphere, [hole]),
+      camera: { tiltDeg: 4, yawDeg: 20 }
+    };
+  },
+  bridge: function (rng, state) {
+    // Horizontal deck + two cylindrical pylons.
+    const deck = makeCapsuleX(0, -0.05, -0.05, 0.65, 0.07);
+    const pylon1 = makeCylinderY(-0.42, -0.70, -0.05, -0.05, 0.06);
+    const pylon2 = makeCylinderY( 0.42, -0.70, -0.05, -0.05, 0.06);
+    return sdfUnion([deck, pylon1, pylon2], 0.04);
+  },
+  drop: function (rng, state) {
+    // Water-droplet silhouette: sphere bottom + cone top, soft-merged.
+    const bulb = makeSphere(0, -0.18, 0, 0.34);
+    const tip  = makeConeY(0, 0.55, -0.18, 0, 0.34);
+    return sdfUnion([bulb, tip], 0.18);
   },
   ufo: function (rng, state) {
     // Saucer = (wide flat disc + dome) profile revolved around Y. The
