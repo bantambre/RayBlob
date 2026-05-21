@@ -54,6 +54,7 @@
         <option value="pyramid">Pyramid</option>
         <option value="lighthouseIsland">Lighthouse island</option>
         <option value="twistedColumn">Twisted column</option>
+        <option value="recursiveTower">Recursive tower</option>
       </select>
     </div>
     <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
@@ -498,6 +499,16 @@ function mirror(sdf, axis) {
   return (x, y, z) => sdf(x, y, Math.abs(z));
 }
 
+// Stack — build N instances of an SDF parametrised by index and combine
+// them. `builder(i)` returns the per-instance SDF. Sharp union when
+// smoothK is 0, smooth-min otherwise. Useful for recursive towers,
+// spiral staircases, repeated motifs that vary slightly per instance.
+function stack(builder, count, smoothK) {
+  const sdfs = [];
+  for (let i = 0; i < count; i++) sdfs.push(builder(i));
+  return sdfUnion(sdfs, smoothK || 0);
+}
+
 // Domain repetition. `period` is an [x, y, z] array; pass 0 on an axis to
 // disable repetition there. Each query point gets wrapped into the
 // [-p/2, p/2] cell before evaluating the underlying SDF.
@@ -703,6 +714,21 @@ const SCENES = {
         return lighthouseBeam(ctx, [-0.06, 0.86, 0]);
       }
     };
+  },
+  recursiveTower: function (rng, state) {
+    // Self-similar tower: stacked boxes that shrink in both width and
+    // height as they rise. The `stack` helper does the loop + union.
+    const tower = stack(function (i) {
+      const sc = Math.pow(0.82, i);
+      const halfH = 0.13 * sc;
+      const halfW = 0.36 * sc;
+      // y position accumulates: each level sits on top of the previous.
+      let y = -0.65;
+      for (let j = 0; j < i; j++) y += 0.26 * Math.pow(0.82, j);
+      y += halfH;
+      return makeBox(0, y, 0, halfW, halfH, halfW, 0.01);
+    }, 7, 0);
+    return { sdf: tower, camera: { tiltDeg: 5, yawDeg: 14 } };
   },
   twistedColumn: function (rng, state) {
     // Tall slab bent into a helix by twistY. Demonstrates the new
