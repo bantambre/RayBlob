@@ -55,6 +55,7 @@
         <option value="lighthouseIsland">Lighthouse island</option>
         <option value="twistedColumn">Twisted column</option>
         <option value="recursiveTower">Recursive tower</option>
+        <option value="ufo">UFO saucer</option>
       </select>
     </div>
     <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
@@ -499,6 +500,42 @@ function mirror(sdf, axis) {
   return (x, y, z) => sdf(x, y, Math.abs(z));
 }
 
+// ============================================================
+// 2-D distance functions in the (r, y) plane — for revolveY profiles.
+// Same call signature as 3-D SDFs (x, y, z) so they compose with the
+// existing sdfUnion/sdfSubtract/smin operators; the `z` argument is
+// ignored. By convention r = the first coord (treat as "radius") and
+// y = the second.
+// ============================================================
+function circle2D(cr, cy, radius) {
+  return function (r, y) {
+    const dr = r - cr, dy = y - cy;
+    return Math.sqrt(dr * dr + dy * dy) - radius;
+  };
+}
+function box2D(cr, cy, hr, hy, round) {
+  const ro = round || 0;
+  const hrR = hr - ro, hyR = hy - ro;
+  return function (r, y) {
+    const dr = Math.abs(r - cr) - hrR;
+    const dy = Math.abs(y - cy) - hyR;
+    const oR = Math.max(dr, 0), oY = Math.max(dy, 0);
+    const outside = Math.sqrt(oR * oR + oY * oY);
+    const inside = Math.min(Math.max(dr, dy), 0);
+    return outside + inside - ro;
+  };
+}
+
+// Revolve a 2-D distance function around the Y axis. The 2-D SDF lives
+// in the (r, y) plane (r = signed radius). The 3-D SDF samples it at
+// r = sqrt(x² + z²). Useful for vases, urns, saucers, banisters, any
+// rotationally-symmetric form.
+function revolveY(dist2D) {
+  return function (x, y, z) {
+    return dist2D(Math.sqrt(x * x + z * z), y, 0);
+  };
+}
+
 // Stack — build N instances of an SDF parametrised by index and combine
 // them. `builder(i)` returns the per-instance SDF. Sharp union when
 // smoothK is 0, smooth-min otherwise. Useful for recursive towers,
@@ -714,6 +751,14 @@ const SCENES = {
         return lighthouseBeam(ctx, [-0.06, 0.86, 0]);
       }
     };
+  },
+  ufo: function (rng, state) {
+    // Saucer = (wide flat disc + dome) profile revolved around Y. The
+    // 2-D profile lives in the (r, y) plane.
+    const disc = box2D(0, 0.55, 0.62, 0.07, 0.05);
+    const dome = circle2D(0, 0.66, 0.20);
+    const saucer = revolveY(sdfUnion([disc, dome], 0.05));
+    return { sdf: saucer, camera: { tiltDeg: 5 } };
   },
   recursiveTower: function (rng, state) {
     // Self-similar tower: stacked boxes that shrink in both width and
