@@ -5,23 +5,24 @@
 <title>RayBlob — 4×5" Hatched Blob</title>
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; padding: 24px; font: 13px/1.45 system-ui, sans-serif;
+  body { margin: 0; padding: 16px; font: 12px/1.35 system-ui, sans-serif;
          background: #1c1c1c; color: #ddd; }
-  .layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
-  .panel { display: flex; flex-direction: column; gap: 10px;
-           min-width: 280px; padding: 18px;
-           background: #262626; border-radius: 8px; }
-  .panel h2 { margin: 0 0 4px; font-size: 11px; font-weight: 600;
-              letter-spacing: 0.08em; text-transform: uppercase; color: #999; }
-  .field { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .field label { color: #aaa; }
-  .field input { width: 120px; padding: 5px 8px; background: #1a1a1a;
-                 color: #eee; border: 1px solid #3a3a3a; border-radius: 4px;
-                 font: inherit; text-align: right; }
+  .layout { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .panel { display: flex; flex-direction: column; gap: 4px;
+           width: 220px; padding: 12px;
+           background: #262626; border-radius: 6px; }
+  .panel h2 { margin: 6px 0 1px; font-size: 10px; font-weight: 600;
+              letter-spacing: 0.06em; text-transform: uppercase; color: #999; }
+  .field { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .field label { color: #aaa; font-size: 11px; }
+  .field input, .field select { width: 78px; padding: 3px 5px; background: #1a1a1a;
+                 color: #eee; border: 1px solid #3a3a3a; border-radius: 3px;
+                 font: inherit; font-size: 11px; text-align: right; }
   .field input[type="text"] { text-align: left; }
-  .row { display: flex; gap: 8px; }
-  button { padding: 9px 14px; background: #3a78d8; color: white;
-           border: none; border-radius: 4px; cursor: pointer; font: inherit; flex: 1; }
+  .row { display: flex; gap: 6px; }
+  button { padding: 6px 8px; background: #3a78d8; color: white;
+           border: none; border-radius: 3px; cursor: pointer; font: inherit;
+           font-size: 11px; flex: 1; }
   button:hover { background: #4a88e8; }
   button.secondary { background: #444; }
   button.secondary:hover { background: #555; }
@@ -42,21 +43,38 @@
   <div class="panel">
     <h2>Composition</h2>
     <div class="field"><label>Seed</label><input id="seed" type="text" value="42"></div>
-    <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="2" max="8" value="4"></div>
+    <div class="field"><label>Scene</label>
+      <select id="scene">
+        <option value="single" selected>Single blob</option>
+        <option value="monoliths">Monoliths</option>
+        <option value="arch">Cave arch</option>
+        <option value="lighthouse">Lighthouse</option>
+        <option value="iceberg">Iceberg</option>
+        <option value="cone">Cone</option>
+        <option value="pyramid">Pyramid</option>
+      </select>
+    </div>
+    <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
     <div class="field"><label>Spread</label><input id="spread" type="number" min="0.2" max="3.0" step="0.1" value="1.0"></div>
     <div class="field"><label>Verticality</label><input id="verticality" type="number" min="0.4" max="3.0" step="0.1" value="1.4"></div>
+    <div class="field"><label>Pointiness</label><input id="pointiness" type="number" min="0" max="2.0" step="0.1" value="0"></div>
     <div class="field"><label>Smoothing k</label><input id="smoothK" type="number" min="0.05" max="0.8" step="0.05" value="0.3"></div>
     <div class="field"><label>Cam tilt (°)</label><input id="camTilt" type="number" min="0" max="20" step="0.5" value="6"></div>
     <div class="field"><label>Sky style</label>
       <select id="skyStyle"
               style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
-        <option value="gradient">Gradient</option>
-        <option value="clouds">Wavy clouds</option>
+        <option value="gradient" selected>Gradient</option>
+        <option value="wobbly">Wobbly lines</option>
+        <option value="multiGradient">Box gradient</option>
+        <option value="paperGrain">Paper grain</option>
+        <option value="arcs">Concentric arcs</option>
+        <option value="none">None (empty sky)</option>
       </select>
     </div>
     <div class="field"><label>Waviness</label><input id="waviness" type="number" min="0" max="8" step="0.25" value="3.0"></div>
+    <div class="field" style="display:none"><label>Cloud threshold</label><input id="cloudThreshold" type="number" min="0.3" max="0.8" step="0.025" value="0.5"></div>
 
-    <h2>Hatching (Pasma)</h2>
+    <h2>Pasma Hatching</h2>
     <div class="field"><label>lw (mm)</label><input id="lw" type="number" min="0.1" max="1.0" step="0.05" value="0.3"></div>
     <div class="field"><label>Density ×lw</label><input id="density" type="number" min="1.5" max="6" step="0.25" value="2.5"></div>
     <div class="field"><label>Buffer res</label><input id="bufRes" type="number" min="200" max="800" step="50" value="400"></div>
@@ -100,18 +118,39 @@ const SY_MIN = -1.25, SY_MAX = 1.25;
 // Camera position is fixed; the *direction* changes with `camTilt`, so the
 // horizon position on screen is configurable. These F/R/U vectors are
 // recomputed at render time by setupCamera().
-const CAM = [0, 0, -5];
-const FOCAL = 4;
+// Camera position and focal distance — `let` so scenes can override them
+// per-render through `setupCamera({ pos, focal, tiltDeg })`. Defaults work
+// for the standard "subject on a horizon" composition.
+let CAM = [0, 0, -5];
+let FOCAL = 4;
 const GROUND_Y = -0.5;
 let camF = [0, 0, 1];
 let camR = [1, 0, 0];
 let camU = [0, 1, 0];
 let syHorizon = 0;
 
-function setupCamera(tiltDeg) {
-  const t = tiltDeg * Math.PI / 180;
-  camF = [0, Math.sin(t), Math.cos(t)];
-  camR = [1, 0, 0];
+// `opts` accepts either a number (legacy tilt-degrees) or an object:
+//   { tiltDeg, yawDeg, distance, pos: [x,y,z], focal }
+// Defaults: tilt 0, yaw 0, distance 5 (camera orbits at this radius around
+// the origin in the xz plane). `pos` overrides the orbit math entirely.
+function setupCamera(opts) {
+  if (typeof opts === 'number') opts = { tiltDeg: opts };
+  opts = opts || {};
+  const tiltDeg = opts.tiltDeg != null ? opts.tiltDeg : 0;
+  const yawDeg  = opts.yawDeg  != null ? opts.yawDeg  : 0;
+  const dist    = opts.distance != null ? opts.distance : 5;
+  const tilt = tiltDeg * Math.PI / 180;
+  const yaw  = yawDeg  * Math.PI / 180;
+  const sy_ = Math.sin(yaw), cy_ = Math.cos(yaw);
+  const st_ = Math.sin(tilt), ct_ = Math.cos(tilt);
+  // Orbit: yaw=0 → camera at (0, 0, -dist) (legacy default).
+  if (opts.pos) CAM = opts.pos.slice();
+  else          CAM = [dist * sy_, 0, -dist * cy_];
+  FOCAL = opts.focal != null ? opts.focal : 4;
+  // Yaw-then-pitch camera basis. F points from CAM toward the origin
+  // (modulo the pitch).
+  camF = [-sy_ * ct_, st_, cy_ * ct_];
+  camR = [ cy_,       0,   sy_      ];
   // U = F × R for right-handed +y-up
   camU = [
     camF[1] * camR[2] - camF[2] * camR[1],
@@ -163,46 +202,336 @@ function smin(a, b, k) {
   const h = Math.max(k - Math.abs(a - b), 0) / k;
   return Math.min(a, b) - h * h * k * 0.25;
 }
-function makeBlobSDF(rng, nSpheres, smoothK, spread, verticality) {
-  // `spread`       — horizontal/radial offset multiplier on lobes
-  // `verticality`  — stretches lobe placement AND each sphere's apparent
-  //                  reach in world-y, producing a vertically elongated blob.
-  if (!spread && spread !== 0) spread = 1;
-  if (!verticality && verticality !== 0) verticality = 1;
-  const V = verticality;
-  // Slightly negative anchor — with a 6° camera tilt the new horizon falls
-  // to sy ≈ -0.42, so a blob at world y = 0 projects right around the horizon.
-  const ANCHOR_Y = 0;
+// Position-aware blob SDF — multiple of these can be composed via
+// sdfUnion() to build "multiple blobs in a scene" (Monoliths, Forest,
+// Cacti, Skyline, …). Each blob picks its own random lobes from `rng`.
+//
+//   opts = {
+//     center:      [x, y, z]   (default [0,0,0])
+//     nSpheres:    int         lobes incl. central anchor
+//     smoothK:     0..0.8      smooth-min radius
+//     spread:      0..3        horizontal/radial offset multiplier
+//     verticality: 0.4..3      world-y stretch (taller > 1)
+//     pointiness:  0..2        upper-lobe taper for sea-stack/cone forms
+//     scale:       any         overall size multiplier
+//   }
+function makeBlobSDFAt(rng, opts) {
+  const center = opts.center || [0, 0, 0];
+  const nSpheres = opts.nSpheres || 4;
+  const smoothK = opts.smoothK == null ? 0.3 : opts.smoothK;
+  const spread = opts.spread == null ? 1 : opts.spread;
+  const V = opts.verticality == null ? 1 : opts.verticality;
+  const P = opts.pointiness || 0;
+  const sc = opts.scale == null ? 1 : opts.scale;
+
   const spheres = [];
-  spheres.push({ c: [0, ANCHOR_Y, 0], r: 0.4 + rng() * 0.15 });
+  spheres.push({ c: center.slice(), r: (0.4 + rng() * 0.15) * sc });
   for (let i = 1; i < nSpheres; i++) {
+    const cyRaw = ((rng() - 0.5) * 0.6 * spread) * V * sc;
+    const taper = cyRaw > 0 ? Math.max(0.15, 1 - P * cyRaw) : 1;
     spheres.push({
       c: [
-        (rng() - 0.5) * 0.7 * spread,
-        ((rng() - 0.5) * 0.6 * spread) * V + ANCHOR_Y,
-        (rng() - 0.5) * 0.5 * spread
+        center[0] + (rng() - 0.5) * 0.7 * spread * taper * sc,
+        center[1] + cyRaw,
+        center[2] + (rng() - 0.5) * 0.5 * spread * taper * sc
       ],
-      r: 0.22 + rng() * 0.25
+      r: (0.22 + rng() * 0.25) * Math.max(0.3, taper) * sc
     });
   }
-  // For a vertical stretch we evaluate distance as if the world y axis is
-  // compressed by 1/V — points further from the centre in y map to "smaller"
-  // distances, so the resulting blob is taller. Not a true Euclidean SDF
-  // (it's an ellipsoidal approximation) but it works for our raymarcher.
-  function ellipsoidSDF(x, y, z, c, r) {
-    const dx = x - c[0];
-    const dy = (y - c[1]) / V;
-    const dz = z - c[2];
-    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
-  }
   return function (x, y, z) {
-    let d = ellipsoidSDF(x, y, z, spheres[0].c, spheres[0].r);
+    function ell(c, r) {
+      const dx = x - c[0];
+      const dy = (y - c[1]) / V;
+      const dz = z - c[2];
+      return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+    }
+    let d = ell(spheres[0].c, spheres[0].r);
     for (let i = 1; i < spheres.length; i++) {
-      d = smin(d, ellipsoidSDF(x, y, z, spheres[i].c, spheres[i].r), smoothK);
+      d = smin(d, ell(spheres[i].c, spheres[i].r), smoothK);
     }
     return d;
   };
 }
+
+// ============================================================
+// SDF composition engines
+// ============================================================
+// Union of multiple SDFs. `smoothK > 0` → smooth-min blending (good for
+// organic forms that flow into each other). `smoothK = 0` → sharp
+// Math.min (good for visually distinct objects).
+function sdfUnion(sdfs, smoothK) {
+  if (sdfs.length === 0) return function () { return Infinity; };
+  if (sdfs.length === 1) return sdfs[0];
+  if (smoothK > 0) {
+    return function (x, y, z) {
+      let d = sdfs[0](x, y, z);
+      for (let i = 1; i < sdfs.length; i++) {
+        d = smin(d, sdfs[i](x, y, z), smoothK);
+      }
+      return d;
+    };
+  }
+  return function (x, y, z) {
+    let d = sdfs[0](x, y, z);
+    for (let i = 1; i < sdfs.length; i++) {
+      const e = sdfs[i](x, y, z);
+      if (e < d) d = e;
+    }
+    return d;
+  };
+}
+
+// Plane carving — subtract each carver from base. `result = max(base, -c0, -c1, …)`.
+// Useful for arches, cave mouths, windows, valleys.
+function sdfSubtract(base, carvers) {
+  if (!carvers || carvers.length === 0) return base;
+  return function (x, y, z) {
+    let d = base(x, y, z);
+    for (let i = 0; i < carvers.length; i++) {
+      const c = -carvers[i](x, y, z);
+      if (c > d) d = c;
+    }
+    return d;
+  };
+}
+
+// Axis-aligned box (optionally rounded). cx,cy,cz = centre; hx,hy,hz = half-sizes.
+// `round` shrinks the box by `round` and adds it back as a fillet — set to 0 for
+// sharp corners.
+function makeBox(cx, cy, cz, hx, hy, hz, round) {
+  const r = round || 0;
+  const hxR = hx - r, hyR = hy - r, hzR = hz - r;
+  return function (x, y, z) {
+    const dx = Math.abs(x - cx) - hxR;
+    const dy = Math.abs(y - cy) - hyR;
+    const dz = Math.abs(z - cz) - hzR;
+    const ox = Math.max(dx, 0), oy = Math.max(dy, 0), oz = Math.max(dz, 0);
+    const outside = Math.sqrt(ox * ox + oy * oy + oz * oz);
+    const inside = Math.min(Math.max(dx, Math.max(dy, dz)), 0);
+    return outside + inside - r;
+  };
+}
+
+// Finite cone with apex at (cx, cy_apex, cz), base disk at y = cy_base with
+// radius r_base. `cy_apex > cy_base` for an upward-pointing cone (pyramid /
+// rocket-cone shape); pass `cy_apex < cy_base` for a downward-pointing cone.
+function makeConeY(cx, cy_apex, cy_base, cz, r_base) {
+  const apexUp = cy_apex > cy_base;
+  const h = Math.abs(cy_apex - cy_base);
+  const slantLen = Math.sqrt(r_base * r_base + h * h);
+  return function (x, y, z) {
+    const dx = x - cx, dz = z - cz;
+    const dxz = Math.sqrt(dx * dx + dz * dz);
+    const py = y - cy_apex;
+
+    // Past the apex point (outside the cone, on the pointy side):
+    if (apexUp ? (py > 0) : (py < 0)) {
+      return Math.sqrt(dxz * dxz + py * py);
+    }
+    // Past the base disk (outside the cone, on the open side):
+    if (apexUp ? (y < cy_base) : (y > cy_base)) {
+      const dxDisk = Math.max(0, dxz - r_base);
+      const dy = y - cy_base;
+      return Math.sqrt(dxDisk * dxDisk + dy * dy);
+    }
+    // Within the cone's height range — signed distance to the slant surface.
+    return (dxz * h - Math.abs(py) * r_base) / slantLen;
+  };
+}
+
+// Square pyramid: square base of `halfSide` half-length centered at
+// (cx, cy_base, cz), apex straight above at (cx, cy_base + height, cz).
+// SDF = max of the four slanted-face half-spaces + the base plane —
+// not a true Euclidean SDF (it under-estimates near edges) but it's
+// a valid Lipschitz SDF that raymarches correctly.
+function makePyramidSquare(cx, cy_base, cz, halfSide, height) {
+  const s = halfSide;
+  const h = height;
+  const norm = Math.sqrt(h * h + s * s) || 1;
+  return function (x, y, z) {
+    const px = x - cx;
+    const py = y - cy_base;
+    const pz = z - cz;
+    // Mirror through the diagonal symmetry of the square so we only have
+    // to evaluate two slant planes instead of four.
+    const ax = Math.abs(px);
+    const az = Math.abs(pz);
+    // Slanted faces: outward normal (h, s, 0)/norm and (0, s, h)/norm.
+    // Plane SDF = (h*|p| + s*y - h*s) / norm, positive outside.
+    const slantX = (h * ax + s * py - h * s) / norm;
+    const slantZ = (h * az + s * py - h * s) / norm;
+    // Base half-space: y ≥ cy_base must hold; outward normal (0, -1, 0).
+    const base = -py;
+    return Math.max(slantX, slantZ, base);
+  };
+}
+
+// Half-space plane. Normal (nx, ny, nz) need not be unit-length; it gets
+// normalised internally. The plane passes through the point where
+// dot(p, n) + d = 0. SDF is positive on the +n side, negative on the -n side
+// — pass as a carver to `sdfSubtract` to slice a base SDF in half.
+function makePlane(nx, ny, nz, d) {
+  const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+  const ux = nx / len, uy = ny / len, uz = nz / len;
+  const ud = d / len;
+  return function (x, y, z) {
+    return x * ux + y * uy + z * uz + ud;
+  };
+}
+
+// Sphere primitive.
+function makeSphere(cx, cy, cz, r) {
+  return function (x, y, z) {
+    const dx = x - cx, dy = y - cy, dz = z - cz;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  };
+}
+
+// Y-axis-aligned finite cylinder from y=cy0 to y=cy1, axis at (cx, _, cz),
+// radius r. Standard "cylinder = (radial cap, axial cap)" combination.
+function makeCylinderY(cx, cy0, cy1, cz, r) {
+  return function (x, y, z) {
+    const dx = x - cx, dz = z - cz;
+    const dxz = Math.sqrt(dx * dx + dz * dz) - r;
+    const dyTop = y - cy1, dyBot = cy0 - y;
+    const dy = Math.max(dyTop, dyBot);
+    const outX = Math.max(dxz, 0), outY = Math.max(dy, 0);
+    const outside = Math.sqrt(outX * outX + outY * outY);
+    const inside = Math.min(Math.max(dxz, dy), 0);
+    return outside + inside;
+  };
+}
+
+// X-axis-aligned capsule — useful as a "tunnel" carver to punch a
+// horizontal arch through a rock. (Hvítserkur-style.)
+function makeCapsuleX(cx, cy, cz, halfLen, r) {
+  return function (x, y, z) {
+    const tx = Math.max(-halfLen, Math.min(halfLen, x - cx));
+    const dx = (x - cx) - tx;
+    const dy = y - cy;
+    const dz = z - cz;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  };
+}
+
+// Z-axis-aligned capsule — front-to-back tunnel.
+function makeCapsuleZ(cx, cy, cz, halfLen, r) {
+  return function (x, y, z) {
+    const tz = Math.max(-halfLen, Math.min(halfLen, z - cz));
+    const dx = x - cx;
+    const dy = y - cy;
+    const dz = (z - cz) - tz;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  };
+}
+
+// ============================================================
+// Scene registry. Adding a new sister project = adding an entry here.
+// Each entry receives (rng, state) and returns the full scene SDF.
+// ============================================================
+const SCENES = {
+  single: function (rng, state) {
+    return makeBlobSDFAt(rng, {
+      center: [0, 0, 0],
+      nSpheres: state.nSpheres,
+      smoothK: state.smoothK,
+      spread: state.spread,
+      verticality: state.verticality,
+      pointiness: state.pointiness
+    });
+  },
+  monoliths: function (rng, state) {
+    // 5 tall, slim, pointed stones spread across x. Sharp union so each
+    // reads as its own object.
+    const blobs = [];
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+      const t = (i + 0.5) / n - 0.5;            // -0.4 to 0.4
+      const x = t * 1.7;
+      const z = (rng() - 0.5) * 0.55 - 0.1;
+      const h = 0.85 + rng() * 0.55;
+      blobs.push(makeBlobSDFAt(rng, {
+        center: [x, 0, z],
+        nSpheres: 3,
+        smoothK: 0.12,
+        spread: 0.35,
+        verticality: 1.4 + h,
+        pointiness: 0.25,
+        scale: 0.5
+      }));
+    }
+    return sdfUnion(blobs, 0);
+  },
+  arch: function (rng, state) {
+    // Tall-ish rock with a tunnel carved front-to-back, just above the
+    // horizon — so the camera sees a circular hole through the rock with
+    // sky/water visible on the far side.
+    //
+    // The tunnel MUST be along Z (front-to-back). An X-axis tunnel runs
+    // perpendicular to the view direction and produces an internal cavity
+    // invisible from the front.
+    const base = makeBlobSDFAt(rng, {
+      center: [0, 0.05, 0],
+      nSpheres: 5,
+      smoothK: 0.35,
+      spread: 1.3,
+      verticality: 1.6,
+      pointiness: 0
+    });
+    const tunnel = makeCapsuleZ(0, 0.12, 0, 0.55, 0.22);
+    return sdfSubtract(base, [tunnel]);
+  },
+  lighthouse: function (rng, state) {
+    // Classic tower: cylindrical body, slightly wider lamp room above,
+    // a small hemispherical roof on top. smoothK softens the joins so the
+    // sections read as one continuous form rather than stacked tubes.
+    const body      = makeCylinderY(0, -0.70,  0.60, 0, 0.16);
+    const lamp      = makeCylinderY(0,  0.60,  0.78, 0, 0.22);
+    const roof      = makeSphere(0, 0.86, 0, 0.18);
+    return sdfUnion([body, lamp, roof], 0.04);
+  },
+  cone: function (rng, state) {
+    // Circular cone — apex up, base on the ground plane.
+    return {
+      sdf: makeConeY(0, 0.75, -0.7, 0, 0.6),
+      camera: { tiltDeg: 9 }
+    };
+  },
+  pyramid: function (rng, state) {
+    // Square-base pyramid, apex straight up. 3/4 view (camera yawed 25°)
+    // so two faces are visible at different lighting — otherwise from
+    // dead-on it reads as a flat triangle silhouette.
+    return {
+      sdf: makePyramidSquare(0, -0.7, 0, 0.7, 1.45),
+      camera: { tiltDeg: 9, yawDeg: 25 }
+    };
+  },
+  iceberg: function (rng, state) {
+    // Two blobs softly merged: a small pointed tip above the waterline
+    // and a much larger rounded body sitting at-and-below the horizon.
+    // The horizon line naturally falls through the join, producing the
+    // iconic "small tip / massive base" iceberg silhouette.
+    const tip = makeBlobSDFAt(rng, {
+      center: [0.08, 0.32, 0],
+      nSpheres: 3,
+      smoothK: 0.12,
+      spread: 0.32,
+      verticality: 1.25,
+      pointiness: 0.55,
+      scale: 0.35
+    });
+    const base = makeBlobSDFAt(rng, {
+      center: [-0.05, -0.30, 0],
+      nSpheres: 5,
+      smoothK: 0.35,
+      spread: 1.1,
+      verticality: 0.75,
+      pointiness: 0,
+      scale: 0.7
+    });
+    return sdfUnion([tip, base], 0.22);
+  }
+};
 
 // ============================================================
 // Camera + raymarch (orthographic in y, mild perspective in z so the
@@ -257,7 +586,7 @@ function renderSceneBuffer(state, sdf) {
   const N = W * H;
   const buf = {
     W, H,
-    surface: new Uint8Array(N),
+    surface: new Uint8Array(N),  // 0=sky 1=rock 2=ground
     nx: new Float32Array(N), ny: new Float32Array(N), nz: new Float32Array(N),
     light: new Float32Array(N),
     depth: new Float32Array(N),
@@ -416,16 +745,18 @@ function generateGroundHatches(state, buf) {
   const sampleStep = 0.003;
 
   // Sparse step at the far end (page bottom); tight step near horizon.
-  const maxDsy = state.lw * state.density * WORLD_PER_MM * 1.6;
-  const minDsy = Math.max(state.lw * WORLD_PER_MM * 0.95, 0.0035);
+  // minDsy floor is 2× line width so even the densest lines keep a visible
+  // gap — otherwise the horizon edge reads as a solid black band.
+  const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
+  const minDsy = Math.max(state.lw * WORLD_PER_MM * 2.0, 0.006);
 
   const fullRange = syHorizon - SY_MIN;
   if (fullRange <= 0) return paths;
 
   let sy = SY_MIN;
-  // A small safety to stop juuust short of the horizon where lines would
-  // start overlapping the horizon stroke.
-  const stopAt = syHorizon - minDsy * 0.6;
+  // Iterate right up to the horizon so the topmost ground line sits
+  // directly beneath the horizon stroke (no white gap between them).
+  const stopAt = syHorizon;
 
   while (sy < stopAt) {
     const d = (syHorizon - sy) / fullRange;          // 1 at bottom → 0 at horizon
@@ -471,15 +802,37 @@ function generateSkyHatches(state, buf) {
   const maxSky = SY_MAX - syHorizon;
   if (maxSky < 0.05) return paths;
 
+  // Optional waviness — displace each sample perpendicular to the scan
+  // direction. When waviness=0, behaves exactly as before (straight 2-pt
+  // segments). When waviness>0, we accumulate polylines.
+  const wobN2 = state.waviness > 0 ? makeNoise2D(state.seed + ':gradWobble') : null;
+  const wobAmp = spacingWorld * 0.2 * state.waviness;
+
   for (let s = -RANGE; s <= RANGE; s += spacingWorld) {
     const sx0 = -sa * s;
     const sy0 = ca * s;
     let inDraw = false;
     let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+    let polyline = [];
+    function flush() {
+      if (wobN2) {
+        if (polyline.length >= 2) paths.push(polyline);
+        polyline = [];
+      } else if (inDraw &&
+                 Math.hypot(lastX - dx0, lastY - dy0) > spacingWorld * 0.3) {
+        paths.push([[dx0, dy0], [lastX, lastY]]);
+      }
+      inDraw = false;
+    }
 
     for (let t = -RANGE; t <= RANGE; t += sampleStep) {
-      const sx = sx0 + ca * t;
-      const sy = sy0 + sa * t;
+      let sx = sx0 + ca * t;
+      let sy = sy0 + sa * t;
+      if (wobN2) {
+        const w = (wobN2(sx * 3, sy * 3) - 0.5) * wobAmp;
+        sx += -sa * w;       // perpendicular to scan direction
+        sy +=  ca * w;
+      }
       let draw = false;
       if (sx >= SX_MIN && sx <= SX_MAX && sy >= SY_MIN && sy <= SY_MAX
           && sy > syHorizon) {
@@ -494,18 +847,198 @@ function generateSkyHatches(state, buf) {
         }
       }
       if (draw) {
-        if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
-        lastX = sx; lastY = sy;
-      } else if (inDraw) {
-        if (Math.hypot(lastX - dx0, lastY - dy0) > spacingWorld * 0.3) {
-          paths.push([[dx0, dy0], [lastX, lastY]]);
+        if (wobN2) {
+          polyline.push([sx, sy]);
+        } else {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
         }
-        inDraw = false;
+        inDraw = true;
+      } else {
+        flush();
       }
     }
-    if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > spacingWorld * 0.3) {
-      paths.push([[dx0, dy0], [lastX, lastY]]);
+    flush();
+  }
+  return paths;
+}
+
+// ============================================================
+// Shared 2-D smoothstep value-noise factory used by the sky textures.
+// ============================================================
+function makeNoise2D(seedKey) {
+  const rng = makeRng(seedKey);
+  const GS = 64;
+  const grid = new Float32Array(GS * GS);
+  for (let i = 0; i < grid.length; i++) grid[i] = rng();
+  return function n2(x, y) {
+    const ux = ((x % GS) + GS) % GS;
+    const uy = ((y % GS) + GS) % GS;
+    const ix = Math.floor(ux), iy = Math.floor(uy);
+    const fx = ux - ix,        fy = uy - iy;
+    const sxF = fx * fx * (3 - 2 * fx);
+    const syF = fy * fy * (3 - 2 * fy);
+    const a = grid[(ix % GS) + (iy % GS) * GS];
+    const b = grid[((ix + 1) % GS) + (iy % GS) * GS];
+    const c = grid[(ix % GS) + ((iy + 1) % GS) * GS];
+    const d = grid[((ix + 1) % GS) + ((iy + 1) % GS) * GS];
+    const ab = a + (b - a) * sxF;
+    const cd = c + (d - c) * sxF;
+    return ab + (cd - ab) * syF;
+  };
+}
+
+// ============================================================
+// Multi-angle gradient — the dashed-fade gradient layered at two angles.
+// (Helper supports waviness — non-zero waviness switches output to polylines
+// with perpendicular noise displacement.)
+// ============================================================
+function _skyGradientAtAngle(state, buf, ang) {
+  const paths = [];
+  const ca = Math.cos(ang), sa = Math.sin(ang);
+  const spacingWorld = state.lw * state.density * WORLD_PER_MM * 1.6;
+  const sampleStep = Math.max(0.0015, spacingWorld * 0.22);
+  const cycleLen = spacingWorld * 1.4;
+  const RANGE = 1.85;
+  const maxSky = SY_MAX - syHorizon;
+  if (maxSky < 0.05) return paths;
+  const wobN2 = state.waviness > 0 ? makeNoise2D(state.seed + ':mgWobble' + ang) : null;
+  const wobAmp = spacingWorld * 0.2 * state.waviness;
+
+  for (let s = -RANGE; s <= RANGE; s += spacingWorld) {
+    const sx0 = -sa * s;
+    const sy0 = ca * s;
+    let inDraw = false;
+    let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+    let polyline = [];
+    function flush() {
+      if (wobN2) {
+        if (polyline.length >= 2) paths.push(polyline);
+        polyline = [];
+      } else if (inDraw &&
+                 Math.hypot(lastX - dx0, lastY - dy0) > spacingWorld * 0.3) {
+        paths.push([[dx0, dy0], [lastX, lastY]]);
+      }
+      inDraw = false;
     }
+    for (let t = -RANGE; t <= RANGE; t += sampleStep) {
+      let sx = sx0 + ca * t;
+      let sy = sy0 + sa * t;
+      if (wobN2) {
+        const w = (wobN2(sx * 3, sy * 3) - 0.5) * wobAmp;
+        sx += -sa * w;
+        sy +=  ca * w;
+      }
+      let draw = false;
+      if (sx >= SX_MIN && sx <= SX_MAX && sy >= SY_MIN && sy <= SY_MAX
+          && sy > syHorizon) {
+        const idx = bufIdx(buf, sx, sy);
+        if (idx >= 0 && buf.surface[idx] === 0) {
+          const above = (sy - syHorizon) / maxSky;
+          const onFrac = above * above;
+          const cyc = (t / cycleLen) - Math.floor(t / cycleLen);
+          draw = cyc < onFrac;
+        }
+      }
+      if (draw) {
+        if (wobN2) polyline.push([sx, sy]);
+        else {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
+        }
+        inDraw = true;
+      } else {
+        flush();
+      }
+    }
+    flush();
+  }
+  return paths;
+}
+function generateSkyMultiGradient(state, buf) {
+  return _skyGradientAtAngle(state, buf, Math.PI / 4)
+    .concat(_skyGradientAtAngle(state, buf, 3 * Math.PI / 4));
+}
+
+// ============================================================
+// Paper grain — horizontal dashed lines, density modulated by 2-D noise,
+// optional vertical wobble via waviness.
+// ============================================================
+function generateSkyPaperGrain(state, buf) {
+  const paths = [];
+  const spacing = state.lw * state.density * WORLD_PER_MM * 1.4;
+  const sampleStep = 0.003;
+  const cycleLen = spacing * 2.0;
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const n2 = makeNoise2D(state.seed + ':paperGrain');
+  const wobN2 = state.waviness > 0 ? makeNoise2D(state.seed + ':paperWobble') : null;
+  const wobAmp = spacing * 0.3 * state.waviness;
+  for (let baseSy = syHorizon + 0.01; baseSy <= SY_MAX; baseSy += spacing) {
+    let inDraw = false;
+    let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+    let polyline = [];
+    function flush() {
+      if (wobN2) {
+        if (polyline.length >= 2) paths.push(polyline);
+        polyline = [];
+      } else if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > 0.005) {
+        paths.push([[dx0, dy0], [lastX, lastY]]);
+      }
+      inDraw = false;
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      const sy = wobN2 ? baseSy + (wobN2(sx * 4, baseSy * 6) - 0.5) * wobAmp : baseSy;
+      const idx = bufIdx(buf, sx, sy);
+      const isSky = (idx >= 0 && buf.surface[idx] === 0);
+      const density = 0.3 + 0.6 * n2(sx * 2.2, sy * 1.8);
+      const cyc = (sx / cycleLen) - Math.floor(sx / cycleLen);
+      const draw = isSky && cyc < density;
+      if (draw) {
+        if (wobN2) polyline.push([sx, sy]);
+        else {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
+        }
+        inDraw = true;
+      } else flush();
+    }
+    flush();
+  }
+  return paths;
+}
+
+// ============================================================
+// Concentric arcs — arc segments around a focal point above the page.
+// Waviness perturbs each arc's radius along its sweep.
+// ============================================================
+function generateSkyArcs(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const focal = [0.0, SY_MAX + 0.3];
+  const spacing = state.lw * state.density * WORLD_PER_MM * 1.8;
+  const minR = 0.25, maxR = 2.8;
+  const angStep = 0.012;
+  const wobN2 = state.waviness > 0 ? makeNoise2D(state.seed + ':arcWobble') : null;
+  const wobAmp = spacing * 0.4 * state.waviness;
+  for (let r = minR; r <= maxR; r += spacing) {
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let theta = 0; theta <= 2 * Math.PI; theta += angStep) {
+      let rr = r;
+      if (wobN2) rr += (wobN2(r * 7, theta * 2.5) - 0.5) * wobAmp;
+      const sx = focal[0] + rr * Math.cos(theta);
+      const sy = focal[1] + rr * Math.sin(theta);
+      if (sx < SX_MIN || sx > SX_MAX || sy < syHorizon || sy > SY_MAX) {
+        flush(); continue;
+      }
+      const idx = bufIdx(buf, sx, sy);
+      if (idx >= 0 && buf.surface[idx] === 0) polyline.push([sx, sy]);
+      else flush();
+    }
+    flush();
   }
   return paths;
 }
@@ -525,20 +1058,27 @@ function generateSkyClouds(state, buf) {
   const spacing = state.lw * state.density * WORLD_PER_MM * 1.5;
   const sampleStep = 0.005;
 
-  // Two octaves of value-noise generated from a seeded PRNG. Cheap and good
-  // enough to evoke cloud strands without bringing in a real noise lib.
+  // 2-D value noise — *critical* that this is genuinely 2D, not 1-D shifted
+  // per row, otherwise adjacent strands share crest positions and form
+  // visible diagonal wave-trains across the cloud band.
   const noiseRng = makeRng(state.seed + ':clouds');
-  const grid = new Float32Array(256);
+  const GS = 64;
+  const grid = new Float32Array(GS * GS);
   for (let i = 0; i < grid.length; i++) grid[i] = noiseRng();
-  function n1(t) {
-    // 1-D smoothed value noise over `t`, modulo 256.
-    const u = ((t % 256) + 256) % 256;
-    const i = Math.floor(u);
-    const f = u - i;
-    const a = grid[i % 256];
-    const b = grid[(i + 1) % 256];
-    const s = f * f * (3 - 2 * f);                // smoothstep
-    return a + (b - a) * s;
+  function n2(x, y) {
+    const ux = ((x % GS) + GS) % GS;
+    const uy = ((y % GS) + GS) % GS;
+    const ix = Math.floor(ux), iy = Math.floor(uy);
+    const fx = ux - ix,        fy = uy - iy;
+    const sxF = fx * fx * (3 - 2 * fx);
+    const syF = fy * fy * (3 - 2 * fy);
+    const a = grid[(ix % GS) + (iy % GS) * GS];
+    const b = grid[((ix + 1) % GS) + (iy % GS) * GS];
+    const c = grid[(ix % GS) + ((iy + 1) % GS) * GS];
+    const d = grid[((ix + 1) % GS) + ((iy + 1) % GS) * GS];
+    const ab = a + (b - a) * sxF;
+    const cd = c + (d - c) * sxF;
+    return ab + (cd - ab) * syF;
   }
 
   // Amplitude of the wavy displacement (in screen-y units). Driven by the
@@ -546,27 +1086,154 @@ function generateSkyClouds(state, buf) {
   const ampBase = spacing * 1.4 * state.waviness;
 
   for (let sy = topThirdStart; sy <= SY_MAX; sy += spacing) {
-    // How far up in the band — 0 at bottom of the band, 1 at the top of page.
-    const tBand = (sy - topThirdStart) / (SY_MAX - topThirdStart);
-    // Per-line phase offsets, so adjacent strands don't move in lockstep.
-    const px = 7.13 * (sy - topThirdStart);
-    const py = 19.7 * (sy - topThirdStart);
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      // Sample the 2D noise field with different scales per octave. The
+      // y-multipliers (9, 19, 31) ensure adjacent cloud rows (spaced ~0.02
+      // in sy) land on uncorrelated noise rows.
+      const n =
+        0.55 * (n2(sx *  3, sy *  9) - 0.5) +
+        0.30 * (n2(sx *  8, sy * 19) - 0.5) +
+        0.15 * (n2(sx * 17, sy * 31) - 0.5);
+      const wavy = sy + n * ampBase;
+      if (wavy < topThirdStart || wavy > SY_MAX) { flush(); continue; }
+      const idx = bufIdx(buf, sx, wavy);
+      const isSky = (idx >= 0 && buf.surface[idx] === 0);
+      if (isSky) {
+        polyline.push([sx, wavy]);
+      } else {
+        flush();
+      }
+    }
+    flush();
+  }
+  return paths;
+}
 
+// ============================================================
+// Wobbly clouds — slight horizontal wobble + irregular missing segments.
+// Two independent 1-D noises per row: one tiny displacement for the wobble,
+// one separate noise thresholded at 0.5 for the dash mask. Smoothed value
+// noise naturally makes the dash on/off runs variable length, so the
+// "missing segments" look organic rather than periodic.
+// ============================================================
+function generateCloudsWobbly(state, buf) {
+  const paths = [];
+  const topThirdStart = SY_MAX - (SY_MAX - SY_MIN) / 3;
+  if (topThirdStart <= syHorizon) return paths;
+
+  const spacing = state.lw * state.density * WORLD_PER_MM * 1.5;
+  const sampleStep = 0.004;
+
+  const noiseRng = makeRng(state.seed + ':wobbly');
+  const grid = new Float32Array(256);
+  for (let i = 0; i < grid.length; i++) grid[i] = noiseRng();
+  function n1(t) {
+    const u = ((t % 256) + 256) % 256;
+    const i = Math.floor(u);
+    const f = u - i;
+    const a = grid[i % 256];
+    const b = grid[(i + 1) % 256];
+    const s = f * f * (3 - 2 * f);
+    return a + (b - a) * s;
+  }
+
+  // Slight wobble — at default waviness=3 this is ~0.6× the line spacing.
+  const wobbleAmp = spacing * 0.2 * state.waviness;
+
+  for (let sy = topThirdStart; sy <= SY_MAX; sy += spacing) {
+    const wobblePhase = sy * 13.7;
+    const dashPhase = sy * 31.5;          // unrelated to wobble — independent runs
+
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      const wobble = (n1(sx * 5 + wobblePhase) - 0.5) * wobbleAmp;
+      const wavy = sy + wobble;
+      // Smoothstep noise crossing 0.5 → variable-length on/off runs.
+      const drawHere = n1(sx * 2.5 + dashPhase) > 0.5;
+      if (wavy < topThirdStart || wavy > SY_MAX) { flush(); continue; }
+      const idx = bufIdx(buf, sx, wavy);
+      const isSky = (idx >= 0 && buf.surface[idx] === 0);
+      if (drawHere && isSky) {
+        polyline.push([sx, wavy]);
+      } else {
+        flush();
+      }
+    }
+    flush();
+  }
+  return paths;
+}
+
+// ============================================================
+// Splotchy clouds (legacy "broken-but-good" behaviour).
+// Per-row 1-D noise displaces the line, but each in-bounds stretch is
+// emitted as a single straight segment from entry to exit point — *not*
+// as a curve through every intermediate sample. The result is an
+// irregular, patchy hatch rather than smooth wavy strokes.
+// ============================================================
+function generateCloudsSplotchy(state, buf) {
+  const paths = [];
+  const topThirdStart = SY_MAX - (SY_MAX - SY_MIN) / 3;
+  if (topThirdStart <= syHorizon) return paths;
+
+  const spacing = state.lw * state.density * WORLD_PER_MM * 1.5;
+  const sampleStep = 0.005;
+
+  // 2-D value noise — adjacent rows sample independent slices, so segments
+  // don't stack into diagonals.
+  const noiseRng = makeRng(state.seed + ':cloudsSplotchy');
+  const GS = 64;
+  const grid = new Float32Array(GS * GS);
+  for (let i = 0; i < grid.length; i++) grid[i] = noiseRng();
+  function n2(x, y) {
+    const ux = ((x % GS) + GS) % GS;
+    const uy = ((y % GS) + GS) % GS;
+    const ix = Math.floor(ux), iy = Math.floor(uy);
+    const fx = ux - ix,        fy = uy - iy;
+    const sxF = fx * fx * (3 - 2 * fx);
+    const syF = fy * fy * (3 - 2 * fy);
+    const a = grid[(ix % GS) + (iy % GS) * GS];
+    const b = grid[((ix + 1) % GS) + (iy % GS) * GS];
+    const c = grid[(ix % GS) + ((iy + 1) % GS) * GS];
+    const d = grid[((ix + 1) % GS) + ((iy + 1) % GS) * GS];
+    const ab = a + (b - a) * sxF;
+    const cd = c + (d - c) * sxF;
+    return ab + (cd - ab) * syF;
+  }
+
+  const ampBase = spacing * 1.4 * state.waviness;
+  // Mask threshold — higher = sparser clouds with more empty sky between.
+  const maskT = 0.42;
+
+  for (let sy = topThirdStart; sy <= SY_MAX; sy += spacing) {
     let inDraw = false;
     let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+    function flush() {
+      if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
+        paths.push([[dx0, dy0], [lastX, lastY]]);
+      }
+      inDraw = false;
+    }
     for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
-      // Composite of two octaves for organic but still-cloud-like wobble.
-      const n =
-        0.65 * (n1(sx * 4 + px) - 0.5) +
-        0.35 * (n1(sx * 10 + py) - 0.5);
+      // Wave displacement
+      const n = 0.65 * (n2(sx * 4, sy * 11) - 0.5) +
+                0.35 * (n2(sx * 10, sy * 23) - 0.5);
       const wavy = sy + n * ampBase;
-      if (wavy < topThirdStart || wavy > SY_MAX) {
-        if (inDraw) {
-          if (Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
-            paths.push([[dx0, dy0], [lastX, lastY]]);
-          }
-          inDraw = false;
-        }
+      // Cloud-presence mask — a separate, lower-frequency noise channel.
+      // Large, soft "cloud" regions where segments cluster; gaps between.
+      const present = n2(sx * 1.4, sy * 3.2) > maskT;
+
+      if (wavy < topThirdStart || wavy > SY_MAX || !present) {
+        flush();
         continue;
       }
       const idx = bufIdx(buf, sx, wavy);
@@ -574,18 +1241,185 @@ function generateSkyClouds(state, buf) {
       if (isSky) {
         if (!inDraw) { dx0 = sx; dy0 = wavy; inDraw = true; }
         lastX = sx; lastY = wavy;
-      } else if (inDraw) {
-        if (Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
-          paths.push([[dx0, dy0], [lastX, lastY]]);
-        }
-        inDraw = false;
+      } else {
+        flush();
       }
     }
-    if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > sampleStep * 0.6) {
-      paths.push([[dx0, dy0], [lastX, lastY]]);
-    }
+    flush();
   }
   return paths;
+}
+
+// ============================================================
+// fBm cloud noise field — shared between the three cloud styles below.
+// 4-octave fractional Brownian motion over a 2-D value-noise table.
+// Output normalised to [0, 1] so `cloudThreshold` reads as a percent.
+// ============================================================
+function makeCloudField(state) {
+  const noiseRng = makeRng(state.seed + ':cloudField');
+  const GS = 64;
+  const grid = new Float32Array(GS * GS);
+  for (let i = 0; i < grid.length; i++) grid[i] = noiseRng();
+  function n2(x, y) {
+    const ux = ((x % GS) + GS) % GS;
+    const uy = ((y % GS) + GS) % GS;
+    const ix = Math.floor(ux), iy = Math.floor(uy);
+    const fx = ux - ix,        fy = uy - iy;
+    const sxF = fx * fx * (3 - 2 * fx);
+    const syF = fy * fy * (3 - 2 * fy);
+    const a = grid[(ix % GS) + (iy % GS) * GS];
+    const b = grid[((ix + 1) % GS) + (iy % GS) * GS];
+    const c = grid[(ix % GS) + ((iy + 1) % GS) * GS];
+    const d = grid[((ix + 1) % GS) + ((iy + 1) % GS) * GS];
+    const ab = a + (b - a) * sxF;
+    const cd = c + (d - c) * sxF;
+    return ab + (cd - ab) * syF;
+  }
+  const baseScale = 3.2;
+  // 4 octaves with geometric weights — Inigo-Quilez-style fBm.
+  // Weight sum = 0.9375; normalise at the end so output ∈ [0, 1].
+  return function fbm(x, y) {
+    let v = 0, amp = 0.5, freq = baseScale;
+    for (let i = 0; i < 4; i++) {
+      v += amp * n2(x * freq, y * freq);
+      freq *= 2;
+      amp *= 0.5;
+    }
+    return v / 0.9375;
+  };
+}
+
+// ============================================================
+// Marching-squares isoline extractor. Samples `fn(x, y)` on a grid and
+// emits 2-point line segments along the level set `fn == threshold`.
+// ============================================================
+function marchingSquares(fn, x0, y0, x1, y1, gridW, gridH, threshold) {
+  const segments = [];
+  const dx = (x1 - x0) / (gridW - 1);
+  const dy = (y1 - y0) / (gridH - 1);
+  const field = new Float32Array(gridW * gridH);
+  for (let gy = 0; gy < gridH; gy++) {
+    const y = y0 + gy * dy;
+    for (let gx = 0; gx < gridW; gx++) {
+      field[gy * gridW + gx] = fn(x0 + gx * dx, y);
+    }
+  }
+  function lerp(a, b, ax, ay, bx, by) {
+    if (Math.abs(b - a) < 1e-10) return [(ax + bx) / 2, (ay + by) / 2];
+    const t = (threshold - a) / (b - a);
+    return [ax + t * (bx - ax), ay + t * (by - ay)];
+  }
+  for (let gy = 0; gy < gridH - 1; gy++) {
+    for (let gx = 0; gx < gridW - 1; gx++) {
+      const tl = field[gy * gridW + gx];
+      const tr = field[gy * gridW + gx + 1];
+      const bl = field[(gy + 1) * gridW + gx];
+      const br = field[(gy + 1) * gridW + gx + 1];
+      const config = (tl >= threshold ? 8 : 0) | (tr >= threshold ? 4 : 0) |
+                     (br >= threshold ? 2 : 0) | (bl >= threshold ? 1 : 0);
+      if (config === 0 || config === 15) continue;
+      const tlx = x0 + gx * dx, tly = y0 + gy * dy;
+      const trx = tlx + dx,     try_ = tly;
+      const blx = tlx,          bly = tly + dy;
+      const brx = tlx + dx,     bry = tly + dy;
+      const T = lerp(tl, tr, tlx, tly, trx, try_);
+      const R = lerp(tr, br, trx, try_, brx, bry);
+      const B = lerp(bl, br, blx, bly, brx, bry);
+      const L = lerp(tl, bl, tlx, tly, blx, bly);
+      switch (config) {
+        case 1:  segments.push([L, B]); break;
+        case 2:  segments.push([B, R]); break;
+        case 3:  segments.push([L, R]); break;
+        case 4:  segments.push([T, R]); break;
+        case 5:  segments.push([L, T]); segments.push([B, R]); break;
+        case 6:  segments.push([T, B]); break;
+        case 7:  segments.push([L, T]); break;
+        case 8:  segments.push([L, T]); break;
+        case 9:  segments.push([T, B]); break;
+        case 10: segments.push([T, R]); segments.push([L, B]); break;
+        case 11: segments.push([T, R]); break;
+        case 12: segments.push([L, R]); break;
+        case 13: segments.push([B, R]); break;
+        case 14: segments.push([L, B]); break;
+      }
+    }
+  }
+  return segments;
+}
+
+// Shared: vertical band where clouds live (top 1/3 of the page, above horizon).
+function cloudBand() {
+  return {
+    bot: Math.max(syHorizon + 0.02, SY_MAX - (SY_MAX - SY_MIN) / 3),
+    top: SY_MAX
+  };
+}
+
+// ============================================================
+// Option A — Cloud mask:
+// horizontal scan lines clipped to `fbm(x, y) > threshold`.
+// Cloud-shaped patches of hatching, with empty sky in between.
+// ============================================================
+function generateCloudsMask(state, buf) {
+  const paths = [];
+  const { bot, top } = cloudBand();
+  if (top - bot < 0.05) return paths;
+
+  const spacing = state.lw * state.density * WORLD_PER_MM * 1.5;
+  const sampleStep = 0.005;
+  const T = state.cloudThreshold;
+  const fbm = makeCloudField(state);
+
+  for (let sy = bot; sy <= top; sy += spacing) {
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      const inCloud = fbm(sx, sy) > T;
+      const idx = bufIdx(buf, sx, sy);
+      const isSky = (idx >= 0 && buf.surface[idx] === 0);
+      if (inCloud && isSky) {
+        polyline.push([sx, sy]);
+      } else {
+        flush();
+      }
+    }
+    flush();
+  }
+  return paths;
+}
+
+// ============================================================
+// Option B — Cloud outline (marching-squares iso-contour at threshold).
+// ============================================================
+function generateCloudsContour(state, buf) {
+  const { bot, top } = cloudBand();
+  if (top - bot < 0.05) return [];
+  const fbm = makeCloudField(state);
+  const T = state.cloudThreshold;
+
+  const gridW = 220, gridH = 80;
+  const segs = marchingSquares(fbm, SX_MIN, bot, SX_MAX, top, gridW, gridH, T);
+
+  // Drop segments where either endpoint is occluded by the blob.
+  const paths = [];
+  for (const s of segs) {
+    const ia = bufIdx(buf, s[0][0], s[0][1]);
+    const ib = bufIdx(buf, s[1][0], s[1][1]);
+    const okA = (ia >= 0 && buf.surface[ia] === 0);
+    const okB = (ib >= 0 && buf.surface[ib] === 0);
+    if (okA && okB) paths.push(s);
+  }
+  return paths;
+}
+
+// ============================================================
+// Option C — Engraved clouds: outline (B) + interior horizontal hatching (A).
+// ============================================================
+function generateCloudsEngraved(state, buf) {
+  return generateCloudsContour(state, buf).concat(generateCloudsMask(state, buf));
 }
 
 // ============================================================
@@ -641,6 +1475,62 @@ function optimizePaths(paths) {
 }
 
 // ============================================================
+// Hershey Sans (subset) — single-stroke vector font for plotter-friendly
+// text overlay. Extracted from HersheySansMed.svg in the WeddingPen repo.
+// Glyph coords are in font space (cap-height 500, y-positive-up).
+// ============================================================
+const HERSHEY_GLYPHS = {" ":{"a":378,"d":""},"#":{"a":662,"d":"M 441 788 L 220 -220 M 630 788 L 410 -220 M 220 378 L 662 378 M 189 189 L 630 189"},"&":{"a":788,"d":"M 756 410 L 724 378 L 756 346 L 788 378 L 788 410 L 756 441 L 724 441 L 693 410 L 662 346 L 598 189 L 536 94.5 L 472 31.5 L 410 0 L 315 0 L 220 31.5 L 189 94.5 L 189 189 L 220 252 L 410 378 L 472 441 L 504 504 L 504 567 L 472 630 L 410 662 L 346 630 L 315 567 L 315 504 L 346 410 L 410 315 L 567 94.5 L 630 31.5 L 724 0 L 756 0 L 788 31.5 L 788 63 M 315 0 L 252 31.5 L 220 94.5 L 220 189 L 252 252 L 315 315 M 315 504 L 346 441 L 598 94.5 L 662 31.5 L 724 0"},",":{"a":346,"d":"M 315 31.5 L 284 0 L 252 0 L 220 31.5 L 220 63 L 252 94.5 L 284 94.5 L 315 63 L 315 -31.5 L 284 -94.5 L 220 -126 M 252 63 L 252 31.5 L 284 31.5 L 284 63 L 252 63 M 284 0 L 315 -31.5 M 315 31.5 L 284 -94.5"},"-":{"a":819,"d":"M 220 284 L 788 284"},".":{"a":346,"d":"M 252 94.5 L 220 63 L 220 31.5 L 252 0 L 284 0 L 315 31.5 L 315 63 L 284 94.5 L 252 94.5 M 252 63 L 252 31.5 L 284 31.5 L 284 63 L 252 63"},"/":{"a":724,"d":"M 724 788 L 158 -220 L 189 -220 M 724 788 L 756 788 L 189 -220"},"0":{"a":630,"d":"M 378 662 L 284 630 L 220 536 L 189 378 L 189 284 L 220 126 L 284 31.5 L 378 0 L 441 0 L 536 31.5 L 598 126 L 630 284 L 630 378 L 598 536 L 536 630 L 441 662 L 378 662 M 315 630 L 252 536 L 220 378 L 220 284 L 252 126 L 315 31.5 M 284 63 L 378 31.5 L 441 31.5 L 536 63 M 504 31.5 L 567 126 L 598 284 L 598 378 L 567 536 L 504 630 M 536 598 L 441 630 L 378 630 L 284 598"},"1":{"a":630,"d":"M 284 536 L 346 567 L 441 662 L 441 0 M 284 536 L 284 504 L 346 536 L 410 598 L 410 0 L 441 0"},"2":{"a":630,"d":"M 220 504 L 220 536 L 252 598 L 284 630 L 346 662 L 472 662 L 536 630 L 567 598 L 598 536 L 598 472 L 567 410 L 504 315 L 220 0 M 220 504 L 252 504 L 252 536 L 284 598 L 346 630 L 472 630 L 536 598 L 567 536 L 567 472 L 536 410 L 472 315 L 189 0 M 220 31.5 L 630 31.5 L 630 0 M 189 0 L 630 0"},"3":{"a":630,"d":"M 252 662 L 598 662 L 378 378 M 252 662 L 252 630 L 567 630 M 567 662 L 346 378 M 378 410 L 441 410 L 536 378 L 598 315 L 630 220 L 630 189 L 598 94.5 L 536 31.5 L 441 0 L 346 0 L 252 31.5 L 220 63 L 189 126 L 220 126 M 346 378 L 441 378 L 536 346 L 598 252 M 472 378 L 567 315 L 598 220 L 598 189 L 567 94.5 L 472 31.5 M 598 158 L 536 63 L 441 31.5 L 346 31.5 L 252 63 L 220 126 M 315 31.5 L 220 94.5"},"4":{"a":630,"d":"M 504 567 L 504 0 L 536 0 M 536 662 L 536 0 M 536 662 L 189 158 L 662 158 M 504 567 L 220 158 M 220 189 L 662 189 L 662 158"},"5":{"a":630,"d":"M 252 662 L 220 378 M 284 630 L 252 410 M 252 662 L 567 662 L 567 630 M 284 630 L 567 630 M 252 410 L 346 441 L 441 441 L 536 410 L 598 346 L 630 252 L 630 189 L 598 94.5 L 536 31.5 L 441 0 L 346 0 L 252 31.5 L 220 63 L 189 126 L 220 126 M 220 378 L 252 378 L 315 410 L 441 410 L 536 378 L 598 284 M 472 410 L 567 346 L 598 252 L 598 189 L 567 94.5 L 472 31.5 M 598 158 L 536 63 L 441 31.5 L 346 31.5 L 252 63 L 220 126 M 315 31.5 L 220 94.5"},"6":{"a":630,"d":"M 536 630 L 567 567 L 598 567 L 567 630 L 472 662 L 410 662 L 315 630 L 252 536 L 220 378 L 220 220 L 252 94.5 L 315 31.5 L 410 0 L 441 0 L 536 31.5 L 598 94.5 L 630 189 L 630 220 L 598 315 L 536 378 L 441 410 L 410 410 L 315 378 L 252 315 M 567 598 L 472 630 L 410 630 L 315 598 M 346 630 L 284 536 L 252 378 L 252 220 L 284 94.5 L 378 31.5 M 252 158 L 315 63 L 410 31.5 L 441 31.5 L 536 63 L 598 158 M 472 31.5 L 567 94.5 L 598 189 L 598 220 L 567 315 L 472 378 M 598 252 L 536 346 L 441 378 L 410 378 L 315 346 L 252 252 M 378 378 L 284 315 L 252 220"},"7":{"a":630,"d":"M 189 662 L 630 662 L 315 0 M 189 662 L 189 630 L 598 630 M 598 662 L 284 0 L 315 0"},"8":{"a":630,"d":"M 346 662 L 252 630 L 220 567 L 220 504 L 252 441 L 284 410 L 346 378 L 472 346 L 536 315 L 567 284 L 598 220 L 598 126 L 567 63 L 472 31.5 L 346 31.5 L 252 63 L 220 126 L 220 220 L 252 284 L 284 315 L 346 346 L 472 378 L 536 410 L 567 441 L 598 504 L 598 567 L 567 630 L 472 662 L 346 662 M 284 630 L 252 567 L 252 504 L 284 441 L 346 410 L 472 378 L 536 346 L 598 284 L 630 220 L 630 126 L 598 63 L 567 31.5 L 472 0 L 346 0 L 252 31.5 L 220 63 L 189 126 L 189 220 L 220 284 L 284 346 L 346 378 L 472 410 L 536 441 L 567 504 L 567 567 L 536 630 M 567 598 L 472 630 L 346 630 L 252 598 M 220 94.5 L 315 31.5 M 504 31.5 L 598 94.5"},"9":{"a":630,"d":"M 567 346 L 504 284 L 410 252 L 378 252 L 284 284 L 220 346 L 189 441 L 189 472 L 220 567 L 284 630 L 378 662 L 410 662 L 504 630 L 567 567 L 598 441 L 598 284 L 567 126 L 504 31.5 L 410 0 L 346 0 L 252 31.5 L 220 94.5 L 252 94.5 L 284 31.5 M 567 441 L 536 346 L 441 284 M 567 410 L 504 315 L 410 284 L 378 284 L 284 315 L 220 410 M 346 284 L 252 346 L 220 441 L 220 472 L 252 567 L 346 630 M 220 504 L 284 598 L 378 630 L 410 630 L 504 598 L 567 504 M 441 630 L 536 567 L 567 441 L 567 284 L 536 126 L 472 31.5 M 504 63 L 410 31.5 L 346 31.5 L 252 63"},":":{"a":346,"d":"M 252 441 L 220 410 L 220 378 L 252 346 L 284 346 L 315 378 L 315 410 L 284 441 L 252 441 M 252 410 L 252 378 L 284 378 L 284 410 L 252 410 M 252 94.5 L 220 63 L 220 31.5 L 252 0 L 284 0 L 315 31.5 L 315 63 L 284 94.5 L 252 94.5 M 252 63 L 252 31.5 L 284 31.5 L 284 63 L 252 63"},"A":{"a":630,"d":"M 410 662 L 158 0 M 410 567 L 189 0 L 158 0 M 410 567 L 630 0 L 662 0 M 410 662 L 662 0 M 252 189 L 567 189 M 220 158 L 598 158"},"B":{"a":630,"d":"M 220 662 L 220 0 M 252 630 L 252 31.5 M 220 662 L 472 662 L 567 630 L 598 598 L 630 536 L 630 441 L 598 378 L 567 346 L 472 315 M 252 630 L 472 630 L 567 598 L 598 536 L 598 441 L 567 378 L 472 346 M 252 346 L 472 346 L 567 315 L 598 284 L 630 220 L 630 126 L 598 63 L 567 31.5 L 472 0 L 220 0 M 252 315 L 472 315 L 567 284 L 598 220 L 598 126 L 567 63 L 472 31.5 L 252 31.5"},"C":{"a":662,"d":"M 662 504 L 630 567 L 567 630 L 504 662 L 378 662 L 315 630 L 252 567 L 220 504 L 189 410 L 189 252 L 220 158 L 252 94.5 L 315 31.5 L 378 0 L 504 0 L 567 31.5 L 630 94.5 L 662 158 M 662 504 L 630 504 L 598 567 L 567 598 L 504 630 L 378 630 L 315 598 L 252 504 L 220 410 L 220 252 L 252 158 L 315 63 L 378 31.5 L 504 31.5 L 567 63 L 598 94.5 L 630 158 L 662 158"},"D":{"a":662,"d":"M 220 662 L 220 0 M 252 630 L 252 31.5 M 220 662 L 441 662 L 536 630 L 598 567 L 630 504 L 662 410 L 662 252 L 630 158 L 598 94.5 L 536 31.5 L 441 0 L 220 0 M 252 630 L 441 630 L 536 598 L 567 567 L 598 504 L 630 410 L 630 252 L 598 158 L 567 94.5 L 536 63 L 441 31.5 L 252 31.5"},"E":{"a":598,"d":"M 220 662 L 220 0 M 252 630 L 252 31.5 M 220 662 L 598 662 M 252 630 L 598 630 L 598 662 M 252 346 L 441 346 L 441 315 M 252 315 L 441 315 M 252 31.5 L 598 31.5 L 598 0 M 220 0 L 598 0"},"F":{"a":567,"d":"M 220 662 L 220 0 M 252 630 L 252 0 L 220 0 M 220 662 L 598 662 M 252 630 L 598 630 L 598 662 M 252 346 L 441 346 L 441 315 M 252 315 L 441 315"},"G":{"a":662,"d":"M 662 504 L 630 567 L 567 630 L 504 662 L 378 662 L 315 630 L 252 567 L 220 504 L 189 410 L 189 252 L 220 158 L 252 94.5 L 315 31.5 L 378 0 L 504 0 L 567 31.5 L 630 94.5 L 662 158 L 662 284 L 504 284 M 662 504 L 630 504 L 598 567 L 567 598 L 504 630 L 378 630 L 315 598 L 284 567 L 252 504 L 220 410 L 220 252 L 252 158 L 284 94.5 L 315 63 L 378 31.5 L 504 31.5 L 567 63 L 598 94.5 L 630 158 L 630 252 L 504 252 L 504 284"},"H":{"a":693,"d":"M 220 662 L 220 0 M 220 662 L 252 662 L 252 0 L 220 0 M 662 662 L 630 662 L 630 0 L 662 0 M 662 662 L 662 0 M 252 346 L 630 346 M 252 315 L 630 315"},"I":{"a":284,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0"},"J":{"a":536,"d":"M 472 662 L 472 158 L 441 63 L 378 31.5 L 315 31.5 L 252 63 L 220 158 L 189 158 M 472 662 L 504 662 L 504 158 L 472 63 L 441 31.5 L 378 0 L 315 0 L 252 31.5 L 220 63 L 189 158"},"K":{"a":662,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0 M 662 662 L 630 662 L 252 284 M 662 662 L 252 252 M 346 378 L 630 0 L 662 0 M 378 378 L 662 0"},"L":{"a":536,"d":"M 220 662 L 220 0 M 220 662 L 252 662 L 252 31.5 M 252 31.5 L 598 31.5 L 598 0 M 220 0 L 598 0"},"M":{"a":756,"d":"M 220 662 L 220 0 M 252 504 L 252 0 L 220 0 M 252 504 L 472 0 M 220 662 L 472 94.5 M 724 662 L 472 94.5 M 693 504 L 472 0 M 693 504 L 693 0 L 724 0 M 724 662 L 724 0"},"N":{"a":693,"d":"M 220 662 L 220 0 M 252 567 L 252 0 L 220 0 M 252 567 L 662 0 M 220 662 L 630 94.5 M 630 662 L 630 94.5 M 630 662 L 662 662 L 662 0"},"O":{"a":693,"d":"M 378 662 L 315 630 L 252 567 L 220 504 L 189 410 L 189 252 L 220 158 L 252 94.5 L 315 31.5 L 378 0 L 504 0 L 567 31.5 L 630 94.5 L 662 158 L 693 252 L 693 410 L 662 504 L 630 567 L 567 630 L 504 662 L 378 662 M 410 630 L 315 598 L 252 504 L 220 410 L 220 252 L 252 158 L 315 63 L 410 31.5 L 472 31.5 L 567 63 L 630 158 L 662 252 L 662 410 L 630 504 L 567 598 L 472 630 L 410 630"},"P":{"a":630,"d":"M 220 662 L 220 0 M 252 630 L 252 0 L 220 0 M 220 662 L 504 662 L 567 630 L 598 598 L 630 536 L 630 441 L 598 378 L 567 346 L 504 315 L 252 315 M 252 630 L 504 630 L 567 598 L 598 536 L 598 441 L 567 378 L 504 346 L 252 346"},"Q":{"a":693,"d":"M 378 662 L 315 630 L 252 567 L 220 504 L 189 410 L 189 252 L 220 158 L 252 94.5 L 315 31.5 L 378 0 L 504 0 L 567 31.5 L 630 94.5 L 662 158 L 693 252 L 693 410 L 662 504 L 630 567 L 567 630 L 504 662 L 378 662 M 410 630 L 315 598 L 252 504 L 220 410 L 220 252 L 252 158 L 315 63 L 410 31.5 L 472 31.5 L 567 63 L 630 158 L 662 252 L 662 410 L 630 504 L 567 598 L 472 630 L 410 630 M 472 94.5 L 630 -63 L 662 -63 M 472 94.5 L 504 94.5 L 662 -63"},"R":{"a":630,"d":"M 220 662 L 220 0 M 252 630 L 252 0 L 220 0 M 220 662 L 472 662 L 567 630 L 598 598 L 630 536 L 630 441 L 598 378 L 567 346 L 472 315 L 252 315 M 252 630 L 472 630 L 567 598 L 598 536 L 598 441 L 567 378 L 472 346 L 252 346 M 410 315 L 598 0 L 630 0 M 441 315 L 630 0"},"S":{"a":630,"d":"M 630 567 L 567 630 L 472 662 L 346 662 L 252 630 L 189 567 L 189 504 L 220 441 L 252 410 L 315 378 L 472 315 L 536 284 L 567 252 L 598 189 L 598 94.5 L 567 63 L 472 31.5 L 346 31.5 L 284 63 L 252 94.5 L 189 94.5 M 630 567 L 567 567 L 536 598 L 472 630 L 346 630 L 252 598 L 220 567 L 220 504 L 252 441 L 315 410 L 472 346 L 536 315 L 598 252 L 630 189 L 630 94.5 L 567 31.5 L 472 0 L 346 0 L 252 31.5 L 189 94.5"},"T":{"a":536,"d":"M 346 630 L 346 0 M 378 630 L 378 0 L 346 0 M 158 662 L 567 662 L 567 630 M 158 662 L 158 630 L 567 630"},"U":{"a":693,"d":"M 220 662 L 220 189 L 252 94.5 L 315 31.5 L 410 0 L 472 0 L 567 31.5 L 630 94.5 L 662 189 L 662 662 M 220 662 L 252 662 L 252 189 L 284 94.5 L 315 63 L 410 31.5 L 472 31.5 L 567 63 L 598 94.5 L 630 189 L 630 662 L 662 662"},"V":{"a":630,"d":"M 158 662 L 410 0 M 158 662 L 189 662 L 410 94.5 M 662 662 L 630 662 L 410 94.5 M 662 662 L 410 0"},"W":{"a":819,"d":"M 158 662 L 346 0 M 158 662 L 189 662 L 346 94.5 M 504 662 L 346 94.5 M 504 567 L 346 0 M 504 567 L 662 0 M 504 662 L 662 94.5 M 850 662 L 819 662 L 662 94.5 M 850 662 L 662 0"},"X":{"a":630,"d":"M 189 662 L 598 0 L 630 0 M 189 662 L 220 662 L 630 0 M 630 662 L 598 662 L 189 0 M 630 662 L 220 0 L 189 0"},"Y":{"a":598,"d":"M 158 662 L 378 346 L 378 0 L 410 0 M 158 662 L 189 662 L 410 346 M 630 662 L 598 662 L 378 346 M 630 662 L 410 346 L 410 0"},"Z":{"a":630,"d":"M 598 662 L 189 0 M 630 662 L 220 0 M 189 662 L 630 662 M 189 662 L 189 630 L 598 630 M 220 31.5 L 630 31.5 L 630 0 M 189 0 L 630 0"},"a":{"a":630,"d":"M 567 441 L 567 0 L 598 0 M 567 441 L 598 441 L 598 0 M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 567 94.5"},"b":{"a":630,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0 M 252 346 L 315 410 L 378 441 L 472 441 L 536 410 L 598 346 L 630 252 L 630 189 L 598 94.5 L 536 31.5 L 472 0 L 378 0 L 315 31.5 L 252 94.5 M 252 346 L 378 410 L 472 410 L 536 378 L 567 346 L 598 252 L 598 189 L 567 94.5 L 536 63 L 472 31.5 L 378 31.5 L 252 94.5"},"c":{"a":567,"d":"M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 536 315 L 504 378 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 504 63 L 536 126 L 567 94.5"},"d":{"a":630,"d":"M 567 662 L 567 0 L 598 0 M 567 662 L 598 662 L 598 0 M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 567 94.5"},"e":{"a":567,"d":"M 220 220 L 567 220 L 567 315 L 536 378 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 220 252 L 536 252 L 536 315 L 504 378 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 504 63 L 536 126 L 567 94.5"},"f":{"a":441,"d":"M 441 662 L 378 662 L 315 630 L 284 536 L 284 0 L 315 0 M 441 662 L 441 630 L 378 630 L 315 598 M 346 630 L 315 536 L 315 0 M 189 441 L 410 441 L 410 410 M 189 441 L 189 410 L 410 410"},"g":{"a":630,"d":"M 598 441 L 567 441 L 567 -31.5 L 536 -126 L 504 -158 L 441 -189 L 378 -189 L 315 -158 L 284 -126 L 220 -126 M 598 441 L 598 -31.5 L 567 -126 L 504 -189 L 441 -220 L 346 -220 L 284 -189 L 220 -126 M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 567 94.5"},"h":{"a":630,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0 M 252 315 L 346 410 L 410 441 L 504 441 L 567 410 L 598 315 L 598 0 M 252 315 L 346 378 L 410 410 L 472 410 L 536 378 L 567 315 L 567 0 L 598 0"},"i":{"a":284,"d":"M 220 662 L 189 630 L 189 598 L 220 567 L 252 567 L 284 598 L 284 630 L 252 662 L 220 662 M 220 630 L 220 598 L 252 598 L 252 630 L 220 630 M 220 441 L 220 0 L 252 0 M 220 441 L 252 441 L 252 0"},"j":{"a":284,"d":"M 220 662 L 189 630 L 189 598 L 220 567 L 252 567 L 284 598 L 284 630 L 252 662 L 220 662 M 220 630 L 220 598 L 252 598 L 252 630 L 220 630 M 220 441 L 220 -220 L 252 -220 M 220 441 L 252 441 L 252 -220"},"k":{"a":598,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0 M 598 441 L 567 441 L 252 126 M 598 441 L 252 94.5 M 346 220 L 536 0 L 598 0 M 378 252 L 598 0"},"l":{"a":284,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0"},"m":{"a":976,"d":"M 220 441 L 220 0 L 252 0 M 220 441 L 252 441 L 252 0 M 252 315 L 346 410 L 410 441 L 504 441 L 567 410 L 598 315 L 598 0 M 252 315 L 346 378 L 410 410 L 472 410 L 536 378 L 567 315 L 567 0 L 598 0 M 598 315 L 693 410 L 756 441 L 850 441 L 914 410 L 945 315 L 945 0 M 598 315 L 693 378 L 756 410 L 819 410 L 882 378 L 914 315 L 914 0 L 945 0"},"n":{"a":630,"d":"M 220 441 L 220 0 L 252 0 M 220 441 L 252 441 L 252 0 M 252 315 L 346 410 L 410 441 L 504 441 L 567 410 L 598 315 L 598 0 M 252 315 L 346 378 L 410 410 L 472 410 L 536 378 L 567 315 L 567 0 L 598 0"},"o":{"a":598,"d":"M 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 L 598 189 L 598 252 L 567 346 L 504 410 L 441 441 L 346 441 M 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 504 63 L 536 94.5 L 567 189 L 567 252 L 536 346 L 504 378 L 441 410 L 346 410"},"p":{"a":630,"d":"M 220 441 L 220 -220 L 252 -220 M 220 441 L 252 441 L 252 -220 M 252 346 L 315 410 L 378 441 L 472 441 L 536 410 L 598 346 L 630 252 L 630 189 L 598 94.5 L 536 31.5 L 472 0 L 378 0 L 315 31.5 L 252 94.5 M 252 346 L 378 410 L 472 410 L 536 378 L 567 346 L 598 252 L 598 189 L 567 94.5 L 536 63 L 472 31.5 L 378 31.5 L 252 94.5"},"q":{"a":630,"d":"M 567 441 L 567 -220 L 598 -220 M 567 441 L 598 441 L 598 -220 M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 567 94.5"},"r":{"a":441,"d":"M 220 441 L 220 0 L 252 0 M 220 441 L 252 441 L 252 0 M 252 252 L 284 346 L 346 410 L 410 441 L 504 441 M 252 252 L 284 315 L 346 378 L 410 410 L 504 410 L 504 441"},"s":{"a":536,"d":"M 536 346 L 504 410 L 410 441 L 315 441 L 220 410 L 189 346 L 220 284 L 284 252 L 441 189 L 504 158 M 472 189 L 504 126 L 504 94.5 L 472 31.5 M 504 63 L 410 31.5 L 315 31.5 L 220 63 M 252 31.5 L 220 94.5 L 189 94.5 M 536 346 L 504 346 L 472 410 M 504 378 L 410 410 L 315 410 L 220 378 M 252 410 L 220 346 L 252 284 M 220 315 L 284 284 L 441 220 L 504 189 L 536 126 L 536 94.5 L 504 31.5 L 410 0 L 315 0 L 220 31.5 L 189 94.5"},"t":{"a":346,"d":"M 252 662 L 252 0 L 284 0 M 252 662 L 284 662 L 284 0 M 158 441 L 378 441 L 378 410 M 158 441 L 158 410 L 378 410"},"u":{"a":630,"d":"M 220 441 L 220 126 L 252 31.5 L 315 0 L 410 0 L 472 31.5 L 567 126 M 220 441 L 252 441 L 252 126 L 284 63 L 346 31.5 L 410 31.5 L 472 63 L 567 126 M 567 441 L 567 0 L 598 0 M 567 441 L 598 441 L 598 0"},"v":{"a":504,"d":"M 158 441 L 346 0 M 158 441 L 189 441 L 346 63 M 536 441 L 504 441 L 346 63 M 536 441 L 346 0"},"w":{"a":756,"d":"M 189 441 L 346 0 M 189 441 L 220 441 L 346 94.5 M 472 441 L 346 94.5 M 472 346 L 346 0 M 472 346 L 598 0 M 472 441 L 598 94.5 M 756 441 L 724 441 L 598 94.5 M 756 441 L 598 0"},"x":{"a":567,"d":"M 189 441 L 536 0 L 567 0 M 189 441 L 220 441 L 567 0 M 567 441 L 536 441 L 189 0 M 567 441 L 220 0 L 189 0"},"y":{"a":504,"d":"M 158 441 L 346 0 M 158 441 L 189 441 L 346 63 M 536 441 L 504 441 L 346 63 L 220 -220 M 536 441 L 346 0 L 252 -220 L 220 -220"},"z":{"a":567,"d":"M 504 410 L 189 0 M 567 441 L 252 31.5 M 189 441 L 567 441 M 189 441 L 189 410 L 504 410 M 252 31.5 L 567 31.5 L 567 0 M 189 0 L 567 0"}};
+
+function parseGlyphPath(d) {
+  if (!d) return [];
+  const polylines = [];
+  let current = [];
+  const tokens = d.split(/\s+/);
+  for (let i = 0; i < tokens.length; ) {
+    const t = tokens[i++];
+    if (t === 'M' || t === 'L') {
+      const x = parseFloat(tokens[i++]);
+      const y = parseFloat(tokens[i++]);
+      if (t === 'M') {
+        if (current.length >= 2) polylines.push(current);
+        current = [[x, y]];
+      } else {
+        current.push([x, y]);
+      }
+    }
+  }
+  if (current.length >= 2) polylines.push(current);
+  return polylines;
+}
+
+function measureText(text, scale) {
+  let w = 0;
+  for (const ch of text) {
+    const g = HERSHEY_GLYPHS[ch];
+    w += (g ? g.a : 400) * scale;
+  }
+  return w;
+}
+
+// Returns polylines in viewBox coords. `vbX,vbY` is the baseline-left anchor;
+// font y-positive-up is flipped to SVG y-positive-down by subtraction.
+function renderTextStrokes(text, vbX, vbY, scale) {
+  const out = [];
+  let cursor = vbX;
+  for (const ch of text) {
+    const g = HERSHEY_GLYPHS[ch];
+    if (!g) { cursor += 400 * scale; continue; }
+    if (g.d) {
+      for (const poly of parseGlyphPath(g.d)) {
+        out.push(poly.map(([gx, gy]) => [cursor + gx * scale, vbY - gy * scale]));
+      }
+    }
+    cursor += g.a * scale;
+  }
+  return out;
+}
+
+// ============================================================
 // SVG output
 // ============================================================
 function sxToVB(sx) {
@@ -649,7 +1539,7 @@ function sxToVB(sx) {
 function syToVB(sy) {
   return MARGIN_VB + (SY_MAX - sy) / (SY_MAX - SY_MIN) * (VB_H - 2 * MARGIN_VB);
 }
-function buildPathD(paths) {
+function buildPathD(paths, vbPaths) {
   let d = '';
   for (const p of paths) {
     if (p.length < 2) continue;
@@ -658,7 +1548,43 @@ function buildPathD(paths) {
       d += 'L' + sxToVB(p[i][0]).toFixed(2) + ',' + syToVB(p[i][1]).toFixed(2);
     }
   }
+  if (vbPaths) {
+    // Already in viewBox coordinates — no sx/syToVB transform.
+    for (const p of vbPaths) {
+      if (p.length < 2) continue;
+      d += 'M' + p[0][0].toFixed(2) + ',' + p[0][1].toFixed(2);
+      for (let i = 1; i < p.length; i++) {
+        d += 'L' + p[i][0].toFixed(2) + ',' + p[i][1].toFixed(2);
+      }
+    }
+  }
   return d;
+}
+
+// Display labels for the sky-style id stored in state.
+const SKY_STYLE_LABEL = {
+  gradient: 'gradient',
+  wobbly: 'wobbly lines',
+  multiGradient: 'box gradient',
+  paperGrain: 'paper grain',
+  arcs: 'concentric arcs',
+  none: 'empty sky',
+  // hidden legacy values still resolvable via URL
+  clouds: 'wavy clouds',
+  splotchy: 'splotchy lines'
+};
+
+// Builds the bottom-margin text polylines (already in viewBox coords).
+function buildBottomLabel(state, strokeCount) {
+  const sky = SKY_STYLE_LABEL[state.skyStyle] || state.skyStyle;
+  const text = 'blobument  /  ' + strokeCount + ' strokes  /  '
+             + sky + '  /  brepettis.com';
+  const scale = 0.032;                       // ~16 vb cap-height
+  const baselineY = VB_H - 18;               // 18 vb above page bottom
+  const w = measureText(text, scale);
+  // True horizontal center on the page width.
+  const startX = (VB_W - w) / 2;
+  return renderTextStrokes(text, startX, baselineY, scale);
 }
 function lwToStrokeVB(lwMM) { return lwMM * (300 / 25.4); }
 
@@ -668,13 +1594,16 @@ function lwToStrokeVB(lwMM) { return lwMM * (300 / 25.4); }
 function readState() {
   return {
     seed: document.getElementById('seed').value || '0',
-    nSpheres: clampInt(document.getElementById('nSpheres').value, 2, 8, 4),
+    scene: document.getElementById('scene').value,
+    nSpheres: clampInt(document.getElementById('nSpheres').value, 4, 12, 4),
     spread: clampFloat(document.getElementById('spread').value, 0.2, 3.0, 1.0),
     verticality: clampFloat(document.getElementById('verticality').value, 0.4, 3.0, 1.4),
+    pointiness: clampFloat(document.getElementById('pointiness').value, 0, 2.0, 0),
     smoothK: clampFloat(document.getElementById('smoothK').value, 0.05, 0.8, 0.3),
     camTilt: clampFloat(document.getElementById('camTilt').value, 0, 20, 6),
     skyStyle: document.getElementById('skyStyle').value,
     waviness: clampFloat(document.getElementById('waviness').value, 0, 8, 3.0),
+    cloudThreshold: clampFloat(document.getElementById('cloudThreshold').value, 0.3, 0.8, 0.5),
     lw: clampFloat(document.getElementById('lw').value, 0.05, 2.0, 0.3),
     density: clampFloat(document.getElementById('density').value, 1.2, 8, 2.5),
     bufRes: clampInt(document.getElementById('bufRes').value, 200, 800, 400),
@@ -696,16 +1625,18 @@ function tick() { return new Promise(r => setTimeout(r, 0)); }
 
 function syncFromUrl() {
   const params = new URLSearchParams(window.location.search);
-  const keys = ['seed','lw','density','nSpheres','spread','verticality',
-                'smoothK','camTilt','skyStyle','waviness','bufRes','lx','ly','lz'];
+  const keys = ['seed','scene','lw','density','nSpheres','spread','verticality',
+                'pointiness','smoothK','camTilt','skyStyle','waviness',
+                'cloudThreshold','bufRes','lx','ly','lz'];
   for (const k of keys) {
     if (params.has(k)) document.getElementById(k).value = params.get(k);
   }
 }
 function writeUrl(state) {
   const params = new URLSearchParams();
-  for (const k of ['seed','lw','density','nSpheres','spread','verticality',
-                   'smoothK','camTilt','skyStyle','waviness']) {
+  for (const k of ['seed','scene','lw','density','nSpheres','spread','verticality',
+                   'pointiness','smoothK','camTilt','skyStyle','waviness',
+                   'cloudThreshold']) {
     params.set(k, state[k]);
   }
   const url = window.location.pathname + '?' + params.toString();
@@ -726,10 +1657,20 @@ async function doRender() {
 
     setStatus('Building blob SDF…');
     await tick();
-    setupCamera(state.camTilt);
     const rng = makeRng(state.seed);
-    const sdf = makeBlobSDF(rng, state.nSpheres, state.smoothK,
-                            state.spread, state.verticality);
+    // Scenes can return either a bare SDF function OR `{ sdf, camera }`
+    // where `camera` is the same options object that setupCamera() accepts.
+    // A scene-supplied camera overrides the UI camTilt for that render.
+    const sceneFn = SCENES[state.scene] || SCENES.single;
+    const sceneResult = sceneFn(rng, state);
+    let sdf, sceneCamera = null;
+    if (typeof sceneResult === 'function') {
+      sdf = sceneResult;
+    } else {
+      sdf = sceneResult.sdf;
+      sceneCamera = sceneResult.camera || null;
+    }
+    setupCamera(sceneCamera || { tiltDeg: state.camTilt });
 
     setStatus('Raymarching scene buffer…');
     await tick();
@@ -741,9 +1682,22 @@ async function doRender() {
     await tick();
     const blob = generateHatches(state, buf);
     const ground = generateGroundHatches(state, buf);
-    const sky = (state.skyStyle === 'clouds')
-      ? generateSkyClouds(state, buf)
-      : generateSkyHatches(state, buf);
+    let sky;
+    switch (state.skyStyle) {
+      case 'wobbly':        sky = generateCloudsWobbly(state, buf); break;
+      case 'multiGradient': sky = generateSkyMultiGradient(state, buf); break;
+      case 'paperGrain':    sky = generateSkyPaperGrain(state, buf); break;
+      case 'arcs':          sky = generateSkyArcs(state, buf); break;
+      case 'none':          sky = []; break;
+      case 'splotchy':      sky = generateCloudsSplotchy(state, buf); break;
+      // The options below are hidden in the UI but still callable from URL
+      // params if you want to inspect them.
+      case 'clouds':       sky = generateSkyClouds(state, buf); break;
+      case 'cloudMask':    sky = generateCloudsMask(state, buf); break;
+      case 'cloudContour': sky = generateCloudsContour(state, buf); break;
+      case 'cloudEngraved':sky = generateCloudsEngraved(state, buf); break;
+      default:             sky = generateSkyHatches(state, buf); break;
+    }
     const rawPaths = blob.concat(ground).concat(sky);
     addHorizonLine(rawPaths, buf);
     const t2 = performance.now();
@@ -753,7 +1707,8 @@ async function doRender() {
     const paths = optimizePaths(rawPaths);
     const t3 = performance.now();
 
-    const d = buildPathD(paths);
+    const labelPaths = buildBottomLabel(state, paths.length);
+    const d = buildPathD(paths, labelPaths);
     const strokeVB = lwToStrokeVB(state.lw);
 
     const svg = document.getElementById('preview');
