@@ -56,6 +56,9 @@
         <option value="twistedColumn">Twisted column</option>
         <option value="recursiveTower">Recursive tower</option>
         <option value="ufo">UFO saucer</option>
+        <option value="forest">Forest</option>
+        <option value="balloons">Hot air balloons</option>
+        <option value="volcano">Volcano</option>
       </select>
     </div>
     <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
@@ -812,6 +815,54 @@ const SCENES = {
         return lighthouseBeam(ctx, [-0.06, 0.86, 0]);
       }
     };
+  },
+  forest: function (rng, state) {
+    // Cluster of tapered trees. Each tree = thin trunk + canopy blob.
+    // Sharp union so individual trees read as distinct silhouettes.
+    const trees = stack(function (i) {
+      const cx = (rng() - 0.5) * 1.6;
+      const cz = (rng() - 0.5) * 0.8 - 0.1;
+      const heightScale = 0.55 + rng() * 0.55;
+      const trunkR = 0.025 + rng() * 0.015;
+      const canopyR = 0.13 * heightScale + rng() * 0.04;
+      const trunkTop = -0.65 + 0.35 * heightScale;
+      const canopyY = trunkTop + canopyR * 0.6;
+      const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR);
+      const canopy = makeSphere(cx, canopyY, cz, canopyR);
+      return sdfUnion([trunk, canopy], 0.03);
+    }, 8, 0);
+    return trees;
+  },
+  balloons: function (rng, state) {
+    // Hot-air-balloon cluster: spheres with small basket boxes hanging
+    // below at varied (x, y, z) so they read as foreground / middle /
+    // background depths.
+    const items = [];
+    const n = 4;
+    for (let i = 0; i < n; i++) {
+      const cx = (rng() - 0.5) * 1.5;
+      const cy = 0.30 + rng() * 0.50;
+      const cz = (rng() - 0.5) * 0.7;
+      const r  = 0.10 + rng() * 0.06;
+      items.push(makeSphere(cx, cy, cz, r));
+      // Basket — narrow rounded box dangling below the balloon.
+      items.push(makeBox(cx, cy - r - 0.05, cz, r * 0.45, 0.025, r * 0.45, 0.008));
+    }
+    return sdfUnion(items, 0);
+  },
+  volcano: function (rng, state) {
+    // Wide cone with a rising smoke plume of stacked spheres twisted
+    // around the y axis for organic motion.
+    const body = makeConeY(0, 0.05, -0.7, 0, 0.65);
+    const plume = stack(function (i) {
+      const y = 0.05 + i * 0.13;
+      const r = 0.10 + i * 0.04;
+      const dx = (rng() - 0.5) * 0.06;
+      const dz = (rng() - 0.5) * 0.04;
+      return makeSphere(dx, y, dz, r);
+    }, 6, 0.10);
+    const twistedPlume = twistY(plume, 1.6);
+    return sdfUnion([body, twistedPlume], 0.08);
   },
   ufo: function (rng, state) {
     // Saucer = (wide flat disc + dome) profile revolved around Y. The
