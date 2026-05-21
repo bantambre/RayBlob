@@ -52,6 +52,7 @@
         <option value="iceberg">Iceberg</option>
         <option value="cone">Cone</option>
         <option value="pyramid">Pyramid</option>
+        <option value="lighthouseIsland">Lighthouse island</option>
         <option value="twistedColumn">Twisted column</option>
       </select>
     </div>
@@ -639,6 +640,26 @@ const SCENES = {
              0.35 * n3(x * 11, y * 11, z * 11);
     }
     return displace(smoothBerg, jagged, 0.09);
+  },
+  lighthouseIsland: function (rng, state) {
+    // Lighthouse perched on a rocky island. Tune Sky style and Ground
+    // style to taste — "Waves" ground is the intended pairing.
+    const island = makeBlobSDFAt(rng, {
+      center: [0, 0, 0],
+      nSpheres: 4,
+      smoothK: 0.4,
+      spread: 1.3,
+      verticality: 0.6,
+      pointiness: 0.4,
+      scale: 0.5
+    });
+    // Tower sits on the island's crest. Slightly off-centred horizontally
+    // for compositional asymmetry.
+    const body = makeCylinderY(-0.06, 0.20,  0.78, 0, 0.12);
+    const lamp = makeCylinderY(-0.06, 0.78,  0.94, 0, 0.17);
+    const roof = makeSphere(-0.06, 1.02, 0, 0.13);
+    const tower = sdfUnion([body, lamp, roof], 0.04);
+    return sdfUnion([island, tower], 0);   // sharp union — tower distinct from island
   },
   twistedColumn: function (rng, state) {
     // Tall slab bent into a helix by twistY. Demonstrates the new
