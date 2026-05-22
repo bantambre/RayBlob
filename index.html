@@ -70,6 +70,7 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="cathedralInterior">Cathedral interior</option>
         <option value="mengerSponge">Menger sponge</option>
         <option value="mobius">Möbius strip</option>
         <option value="dinoRibcage">Dinosaur ribcage</option>
@@ -1048,6 +1049,41 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  cathedralInterior: function (rng, state) {
+    // Receding rows of columns flanking a central nave, plus a back wall
+    // far ahead — Cathedral interior viewed from just inside the entrance.
+    //
+    // The camera sits at z=0 looking down +z; rows of pillars stretch from
+    // z=0.6 back to z=3.2, converging to the back wall at z=3.6.
+    const parts = [];
+    for (let i = 0; i < 6; i++) {
+      const z = 0.7 + i * 0.45;
+      parts.push(makeCylinderY(-0.40, -0.45, 0.55, z, 0.045));
+      parts.push(makeCylinderY( 0.40, -0.45, 0.55, z, 0.045));
+    }
+    // Back wall (well in front of the camera, perpendicular to the nave).
+    parts.push(makeBox(0, 0.05, 3.6, 0.55, 0.55, 0.05, 0.020));
+    // Tall arched window carved out of the back wall.
+    parts.push(makeCapsuleZ(0, 0.05, 3.6, 0.3, 0.20));
+    // Floor strip down the nave.
+    parts.push(makeBox(0, -0.50, 2.0, 0.45, 0.02, 1.4, 0.010));
+    // Subtract the arched window from the back wall.
+    const wall = makeBox(0, 0.05, 3.6, 0.55, 0.55, 0.05, 0.020);
+    const arch = makeCapsuleZ(0, -0.15, 3.6, 0.3, 0.20);
+    const wallWithArch = sdfSubtract(wall, [arch]);
+    // Rebuild parts cleanly: pillars + floor + walled-with-arch back.
+    const pillars = [];
+    for (let i = 0; i < 6; i++) {
+      const z = 0.7 + i * 0.45;
+      pillars.push(makeCylinderY(-0.40, -0.45, 0.55, z, 0.045));
+      pillars.push(makeCylinderY( 0.40, -0.45, 0.55, z, 0.045));
+    }
+    const floor = makeBox(0, -0.50, 2.0, 0.45, 0.02, 1.4, 0.010);
+    return {
+      sdf: sdfUnion([...pillars, floor, wallWithArch], 0),
+      camera: { tiltDeg: 3, focal: 3.0 }
+    };
   },
   mengerSponge: function (rng, state) {
     // Menger sponge level 1: 3x3x3 grid of unit cubes with the seven
