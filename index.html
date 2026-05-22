@@ -70,6 +70,8 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="mengerSponge">Menger sponge</option>
+        <option value="mobius">Möbius strip</option>
         <option value="dinoRibcage">Dinosaur ribcage</option>
         <option value="wave">Wave</option>
         <option value="submerged">Submerged (kelp)</option>
@@ -1046,6 +1048,50 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  mengerSponge: function (rng, state) {
+    // Menger sponge level 1: 3x3x3 grid of unit cubes with the seven
+    // "center" cubes removed (body center + 6 face centers). A cube
+    // is removed if at least two of its three index coordinates are 1.
+    const parts = [];
+    const half = 0.10;
+    for (let ix = 0; ix < 3; ix++) {
+      for (let iy = 0; iy < 3; iy++) {
+        for (let iz = 0; iz < 3; iz++) {
+          const centerCount = (ix === 1 ? 1 : 0) + (iy === 1 ? 1 : 0) + (iz === 1 ? 1 : 0);
+          if (centerCount >= 2) continue;
+          parts.push(makeBox(
+            -0.30 + ix * 0.20,
+            -0.30 + iy * 0.20,
+            -0.30 + iz * 0.20,
+            half, half, half, 0.005
+          ));
+        }
+      }
+    }
+    return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 14, yawDeg: 28 } };
+  },
+  mobius: function (rng, state) {
+    // 32 thin flat band segments around a loop, each rotated around its
+    // radial axis by twist = i/n × π. After a full loop the band has
+    // half-turned — the defining property of a Möbius strip.
+    const parts = [];
+    const n = 32;
+    const radius = 0.32;
+    for (let i = 0; i < n; i++) {
+      const phi = (i / n) * Math.PI * 2;
+      const twist = (i / n) * Math.PI;
+      const seg = makeBox(0, 0, 0, 0.05, 0.006, 0.04, 0.004);
+      const twisted = rotateX(seg, twist);
+      const positioned = rotateY(twisted, phi);
+      parts.push(translate(
+        positioned,
+        Math.cos(phi) * radius,
+        0,
+        -Math.sin(phi) * radius
+      ));
+    }
+    return { sdf: sdfUnion(parts, 0.010), camera: { tiltDeg: 22, yawDeg: 18 } };
   },
   dinoRibcage: function (rng, state) {
     // Central spine + paired arcing ribs. Each rib is 4 short capsule
