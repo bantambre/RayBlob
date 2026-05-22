@@ -127,6 +127,15 @@
         <option value="waves">Waves</option>
       </select>
     </div>
+    <div class="field"><label>Hatch style</label>
+      <select id="hatchStyle"
+              style="width:140px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
+        <option value="scan" selected>Scan (4-angle)</option>
+        <option value="isoDepth">Iso-depth contours</option>
+        <option value="projNormal">Projected normal</option>
+        <option value="principal">Principal curvature</option>
+      </select>
+    </div>
     <div class="field"><label>Sky style</label>
       <select id="skyStyle"
               style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
@@ -2111,6 +2120,237 @@ function generateHatches(state, buf) {
 }
 
 // ============================================================
+// Curved hatching: trace evenly-spaced streamlines through a direction
+// field defined per buffer pixel. Three field flavours are available:
+//
+//   isoDepth   — perpendicular to the depth gradient (topographic
+//                contours: lines of constant distance from the camera).
+//   projNormal — perpendicular to the projected surface normal in
+//                screen space (continuous version of the scan-line
+//                hatcher's per-pixel primary angle).
+//   principal  — direction of slowest change of the lighting field; a
+//                cheap stand-in for principal curvature.
+// ============================================================
+function bufPxToScreen(buf, px, py) {
+  const sx = SX_MIN + (px / (buf.W - 1)) * (SX_MAX - SX_MIN);
+  const sy = SY_MAX - (py / (buf.H - 1)) * (SY_MAX - SY_MIN);
+  return [sx, sy];
+}
+
+function fieldIsoDepth(buf, ix, iy) {
+  const W = buf.W, H = buf.H;
+  if (ix <= 0 || ix >= W - 1 || iy <= 0 || iy >= H - 1) return null;
+  const i = iy * W + ix;
+  if (buf.surface[i] !== 1) return null;
+  const dxR = (buf.surface[i + 1]   === 1) ? buf.depth[i + 1]   : buf.depth[i];
+  const dxL = (buf.surface[i - 1]   === 1) ? buf.depth[i - 1]   : buf.depth[i];
+  const dyD = (buf.surface[i + W]   === 1) ? buf.depth[i + W]   : buf.depth[i];
+  const dyU = (buf.surface[i - W]   === 1) ? buf.depth[i - W]   : buf.depth[i];
+  const gx = (dxR - dxL) * 0.5;
+  const gy = (dyD - dyU) * 0.5;
+  const mag = Math.hypot(gx, gy);
+  if (mag < 1e-6) return [1, 0];
+  return [-gy / mag, gx / mag];
+}
+
+function fieldProjNormal(buf, ix, iy) {
+  const i = iy * buf.W + ix;
+  if (buf.surface[i] !== 1) return null;
+  const nx = buf.nx[i], ny = buf.ny[i];
+  const mag = Math.hypot(nx, ny);
+  if (mag < 1e-4) return [1, 0];
+  return [-ny / mag, nx / mag];
+}
+
+function fieldPrincipal(buf, ix, iy) {
+  const W = buf.W, H = buf.H;
+  if (ix <= 0 || ix >= W - 1 || iy <= 0 || iy >= H - 1) return null;
+  const i = iy * W + ix;
+  if (buf.surface[i] !== 1) return null;
+  const dxR = (buf.surface[i + 1]   === 1) ? buf.light[i + 1]   : buf.light[i];
+  const dxL = (buf.surface[i - 1]   === 1) ? buf.light[i - 1]   : buf.light[i];
+  const dyD = (buf.surface[i + W]   === 1) ? buf.light[i + W]   : buf.light[i];
+  const dyU = (buf.surface[i - W]   === 1) ? buf.light[i - W]   : buf.light[i];
+  const gx = (dxR - dxL) * 0.5;
+  const gy = (dyD - dyU) * 0.5;
+  const mag = Math.hypot(gx, gy);
+  if (mag < 1e-6) return [1, 0];
+  return [-gy / mag, gx / mag];
+}
+
+function generateCurveHatches(state, buf, fieldFn) {
+  const W = buf.W, H = buf.H;
+  const occ = new Uint8Array(W * H);
+
+  // Spacing in pixel space, derived from the same lw × density product
+  // the scan-line hatcher uses, but mapped through buffer resolution.
+  const spacingMM = state.lw * state.density;
+  const spacingWorld = Math.max(0.002, spacingMM * WORLD_PER_MM);
+  const pxPerWorld = (W - 1) / (SX_MAX - SX_MIN);
+  const spacingPx = Math.max(2, Math.round(spacingWorld * pxPerWorld));
+  const sepSqr = spacingPx * spacingPx;
+
+  const stepPx = 1.0;
+  const maxSteps = Math.max(80, Math.round(Math.max(W, H) * 0.8));
+
+  function isFreeSeed(px, py) {
+    const ix = Math.round(px), iy = Math.round(py);
+    if (ix < 0 || ix >= W || iy < 0 || iy >= H) return false;
+    if (buf.surface[iy * W + ix] !== 1) return false;
+    const r = spacingPx;
+    const x0 = Math.max(0, ix - r), x1 = Math.min(W - 1, ix + r);
+    const y0 = Math.max(0, iy - r), y1 = Math.min(H - 1, iy + r);
+    for (let y = y0; y <= y1; y++) {
+      const dy = y - iy;
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - ix;
+        if (dx * dx + dy * dy > sepSqr) continue;
+        if (occ[y * W + x]) return false;
+      }
+    }
+    return true;
+  }
+
+  function markStrip(px, py) {
+    const ix = Math.round(px), iy = Math.round(py);
+    if (ix < 0 || ix >= W || iy < 0 || iy >= H) return;
+    occ[iy * W + ix] = 1;
+  }
+
+  function trace(px, py, dirSign, ignoreFlagsAroundSeed) {
+    const points = [[px, py]];
+    let lastDx = 0, lastDy = 0;
+    let stepsSinceSeed = 0;
+    for (let step = 0; step < maxSteps; step++) {
+      const ix = Math.round(px), iy = Math.round(py);
+      if (ix < 0 || ix >= W || iy < 0 || iy >= H) break;
+      if (buf.surface[iy * W + ix] !== 1) break;
+      const f = fieldFn(buf, ix, iy);
+      if (!f) break;
+      let dx = f[0] * dirSign;
+      let dy = f[1] * dirSign;
+      // Flip if reversing — preserves orientation of the streamline.
+      if (step > 0 && (lastDx * dx + lastDy * dy) < 0) { dx = -dx; dy = -dy; }
+      px += dx * stepPx;
+      py += dy * stepPx;
+      lastDx = dx; lastDy = dy;
+      stepsSinceSeed++;
+      // After we've moved away from the seed (≥ spacing*0.6), enforce
+      // separation from other streamlines.
+      if (stepsSinceSeed > spacingPx * 0.6 && !ignoreFlagsAroundSeed) {
+        const px2 = Math.round(px), py2 = Math.round(py);
+        if (px2 < 0 || px2 >= W || py2 < 0 || py2 >= H) break;
+        if (occ[py2 * W + px2]) break;
+      }
+      points.push([px, py]);
+    }
+    return points;
+  }
+
+  const paths = [];
+  const seedStride = Math.max(2, Math.floor(spacingPx * 0.7));
+  for (let py = 1; py < H - 1; py += seedStride) {
+    for (let px = 1; px < W - 1; px += seedStride) {
+      const idx = py * W + px;
+      if (buf.surface[idx] !== 1) continue;
+      if (!isFreeSeed(px, py)) continue;
+
+      // Trace both directions; ignore occupancy near the seed so the
+      // forward and backward halves can join through the seed cell.
+      const fwd = trace(px, py, +1, false);
+      const bwd = trace(px, py, -1, false);
+      const merged = bwd.slice(1).reverse().concat(fwd);
+      if (merged.length < 3) continue;
+
+      for (const [pxp, pyp] of merged) markStrip(pxp, pyp);
+
+      paths.push(merged.map(p => bufPxToScreen(buf, p[0], p[1])));
+    }
+  }
+
+  // Crosshatch pass: in dark / shadowed regions, lay down a second set
+  // of streamlines perpendicular to the field so unlit areas read darker.
+  // Skip for isoDepth since perpendicular iso-depth is iso-screen-x which
+  // is not a meaningful contour.
+  if (fieldFn !== fieldIsoDepth) {
+    const occ2 = new Uint8Array(W * H);
+    const darkThreshold = 0.55;
+    function fieldPerp(buf, ix, iy) {
+      const f = fieldFn(buf, ix, iy);
+      if (!f) return null;
+      return [-f[1], f[0]];
+    }
+    function isFreeSeed2(px, py) {
+      const ix = Math.round(px), iy = Math.round(py);
+      if (ix < 0 || ix >= W || iy < 0 || iy >= H) return false;
+      if (buf.surface[iy * W + ix] !== 1) return false;
+      const i = iy * W + ix;
+      const dark = (1 - buf.light[i]) + (buf.shadow[i] ? 0.30 : 0);
+      if (dark < darkThreshold) return false;
+      const r = spacingPx;
+      const x0 = Math.max(0, ix - r), x1 = Math.min(W - 1, ix + r);
+      const y0 = Math.max(0, iy - r), y1 = Math.min(H - 1, iy + r);
+      for (let y = y0; y <= y1; y++) {
+        const dy = y - iy;
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - ix;
+          if (dx * dx + dy * dy > sepSqr) continue;
+          if (occ2[y * W + x]) return false;
+        }
+      }
+      return true;
+    }
+    function trace2(px, py, dirSign) {
+      const points = [[px, py]];
+      let lastDx = 0, lastDy = 0;
+      let stepsSinceSeed = 0;
+      for (let step = 0; step < maxSteps; step++) {
+        const ix = Math.round(px), iy = Math.round(py);
+        if (ix < 0 || ix >= W || iy < 0 || iy >= H) break;
+        if (buf.surface[iy * W + ix] !== 1) break;
+        const i = iy * W + ix;
+        const dark = (1 - buf.light[i]) + (buf.shadow[i] ? 0.30 : 0);
+        if (dark < darkThreshold - 0.10) break;
+        const f = fieldPerp(buf, ix, iy);
+        if (!f) break;
+        let dx = f[0] * dirSign;
+        let dy = f[1] * dirSign;
+        if (step > 0 && (lastDx * dx + lastDy * dy) < 0) { dx = -dx; dy = -dy; }
+        px += dx * stepPx;
+        py += dy * stepPx;
+        lastDx = dx; lastDy = dy;
+        stepsSinceSeed++;
+        if (stepsSinceSeed > spacingPx * 0.6) {
+          const px2 = Math.round(px), py2 = Math.round(py);
+          if (px2 < 0 || px2 >= W || py2 < 0 || py2 >= H) break;
+          if (occ2[py2 * W + px2]) break;
+        }
+        points.push([px, py]);
+      }
+      return points;
+    }
+    for (let py = 1; py < H - 1; py += seedStride) {
+      for (let px = 1; px < W - 1; px += seedStride) {
+        const idx = py * W + px;
+        if (buf.surface[idx] !== 1) continue;
+        if (!isFreeSeed2(px, py)) continue;
+        const fwd = trace2(px, py, +1);
+        const bwd = trace2(px, py, -1);
+        const merged = bwd.slice(1).reverse().concat(fwd);
+        if (merged.length < 3) continue;
+        for (const [pxp, pyp] of merged) {
+          const ix = Math.round(pxp), iy = Math.round(pyp);
+          if (ix >= 0 && ix < W && iy >= 0 && iy < H) occ2[iy * W + ix] = 1;
+        }
+        paths.push(merged.map(p => bufPxToScreen(buf, p[0], p[1])));
+      }
+    }
+  }
+
+  return paths;
+}
+
+// ============================================================
 // Ground hatches: horizontal lines spaced evenly in WORLD z (depth),
 // so they bunch toward the horizon and feel like they recede.
 //
@@ -3098,6 +3338,7 @@ function readState() {
     pointiness: clampFloat(document.getElementById('pointiness').value, 0, 2.0, 0),
     smoothK: clampFloat(document.getElementById('smoothK').value, 0.05, 0.8, 0.3),
     camTilt: clampFloat(document.getElementById('camTilt').value, 0, 20, 6),
+    hatchStyle: document.getElementById('hatchStyle').value,
     skyStyle: document.getElementById('skyStyle').value,
     groundStyle: document.getElementById('groundStyle').value,
     waviness: clampFloat(document.getElementById('waviness').value, 0, 8, 3.0),
@@ -3124,7 +3365,7 @@ function tick() { return new Promise(r => setTimeout(r, 0)); }
 function syncFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const keys = ['seed','scene','lw','density','nSpheres','spread','verticality',
-                'pointiness','smoothK','camTilt','skyStyle','groundStyle','waviness',
+                'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness',
                 'cloudThreshold','bufRes','lx','ly','lz'];
   for (const k of keys) {
     if (params.has(k)) document.getElementById(k).value = params.get(k);
@@ -3133,7 +3374,7 @@ function syncFromUrl() {
 function writeUrl(state) {
   const params = new URLSearchParams();
   for (const k of ['seed','scene','lw','density','nSpheres','spread','verticality',
-                   'pointiness','smoothK','camTilt','skyStyle','groundStyle','waviness',
+                   'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness',
                    'cloudThreshold']) {
     params.set(k, state[k]);
   }
@@ -3178,7 +3419,13 @@ async function doRender() {
 
     setStatus('Generating hatches…');
     await tick();
-    const blob = generateHatches(state, buf);
+    let blob;
+    switch (state.hatchStyle) {
+      case 'isoDepth':   blob = generateCurveHatches(state, buf, fieldIsoDepth);   break;
+      case 'projNormal': blob = generateCurveHatches(state, buf, fieldProjNormal); break;
+      case 'principal':  blob = generateCurveHatches(state, buf, fieldPrincipal);  break;
+      default:           blob = generateHatches(state, buf);                       break;
+    }
     const groundLines = (state.groundStyle === 'waves')
       ? generateGroundWaves(state, buf)
       : generateGroundHatches(state, buf);
