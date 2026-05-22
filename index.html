@@ -70,6 +70,10 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="schotter">Schotter (3D)</option>
+        <option value="spiralStaircase">Spiral staircase</option>
+        <option value="whaleBreach">Whale breach</option>
+        <option value="coral">Coral / branching</option>
         <option value="aurora">Aurora</option>
         <option value="rain">Rain</option>
         <option value="searchlight">Searchlight</option>
@@ -556,6 +560,35 @@ function warp(sdf, fn) {
   };
 }
 
+// Constant-angle rotations around each axis. `angle` is in radians.
+// The position is rotated by the inverse so the SHAPE is rotated by +angle.
+function rotateY(sdf, angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return function (x, y, z) {
+    return sdf(x * c + z * s, y, -x * s + z * c);
+  };
+}
+function rotateZ(sdf, angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return function (x, y, z) {
+    return sdf(x * c + y * s, -x * s + y * c, z);
+  };
+}
+function rotateX(sdf, angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return function (x, y, z) {
+    return sdf(x, y * c + z * s, -y * s + z * c);
+  };
+}
+
+// Translate an SDF by (dx, dy, dz). Pairs with rotate to place rotated
+// shapes anywhere in space.
+function translate(sdf, dx, dy, dz) {
+  return function (x, y, z) {
+    return sdf(x - dx, y - dy, z - dz);
+  };
+}
+
 // Domain repetition: wrap each axis by its period before evaluating, so
 // a single SDF tiles infinitely along that axis. period <= 0 disables
 // repetition on that axis.
@@ -1010,6 +1043,74 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  schotter: function (rng, state) {
+    // Grid of unit boxes, each row progressively more random in rotation
+    // and position — homage to Georg Nees' Schotter (1968).
+    const parts = [];
+    const rows = 6, cols = 7;
+    const unit = makeBox(0, 0, 0, 0.055, 0.040, 0.040, 0.005);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const chaos = r / rows;
+        const x = -0.46 + c * 0.13 + (rng() - 0.5) * chaos * 0.05;
+        const y = -0.36 + r * 0.10 + (rng() - 0.5) * chaos * 0.03;
+        const z = (rng() - 0.5) * chaos * 0.10;
+        const angle = (rng() - 0.5) * chaos * 1.8;
+        parts.push(translate(rotateY(unit, angle), x, y, z));
+      }
+    }
+    return sdfUnion(parts, 0);
+  },
+  spiralStaircase: function (rng, state) {
+    // 12 steps spiralling up around a central column.
+    const parts = [];
+    parts.push(makeCylinderY(0, -0.55, 0.55, 0, 0.045));
+    const nSteps = 12;
+    const radius = 0.18;
+    const step = makeBox(0, 0, 0, 0.13, 0.015, 0.05, 0.005);
+    for (let i = 0; i < nSteps; i++) {
+      const angle = i * (Math.PI / 6);
+      const y = -0.50 + i * 0.085;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      parts.push(translate(rotateY(step, angle), x, y, z));
+    }
+    return sdfUnion(parts, 0);
+  },
+  whaleBreach: function (rng, state) {
+    // Whale body as a long horizontal capsule with a tail box at one end,
+    // rotated 50° around Z so the body points up and to the right —
+    // mid-breach silhouette.
+    const body = makeCapsuleX(0, 0, 0, 0.28, 0.10);
+    const tailFin = makeBox(-0.34, 0, 0, 0.025, 0.10, 0.04, 0.005);
+    const whale = sdfUnion([body, tailFin], 0.05);
+    return translate(rotateZ(whale, -55 * Math.PI / 180), 0.05, 0.05, 0);
+  },
+  coral: function (rng, state) {
+    // Branching coral: base sphere + four V-branches + tip spheres.
+    // Each branch is a capsuleX rotated and translated to join its
+    // start to its end point in screen space.
+    function branch(x0, y0, x1, y1, r) {
+      const dx = x1 - x0, dy = y1 - y0;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      const angle = Math.atan2(dy, dx);
+      const mid = makeCapsuleX(0, 0, 0, len / 2, r);
+      return translate(rotateZ(mid, angle), (x0 + x1) / 2, (y0 + y1) / 2, 0);
+    }
+    return sdfUnion([
+      makeSphere(0, -0.45, 0, 0.08),
+      branch( 0,    -0.42, -0.10, -0.10, 0.040),
+      branch(-0.10, -0.10, -0.22,  0.20, 0.028),
+      branch(-0.10, -0.10,  0.02,  0.22, 0.028),
+      branch( 0,    -0.42,  0.12, -0.05, 0.040),
+      branch( 0.12, -0.05,  0.24,  0.22, 0.028),
+      branch( 0.12, -0.05,  0.07,  0.20, 0.028),
+      makeSphere(-0.22,  0.20, 0, 0.045),
+      makeSphere( 0.02,  0.22, 0, 0.045),
+      makeSphere( 0.24,  0.22, 0, 0.045),
+      makeSphere( 0.07,  0.20, 0, 0.045)
+    ], 0.025);
   },
   aurora: function (rng, state) {
     // Low ridge silhouette below + curtain of aurora ribbons across the sky.
