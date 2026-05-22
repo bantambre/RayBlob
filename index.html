@@ -70,6 +70,9 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="dinoRibcage">Dinosaur ribcage</option>
+        <option value="wave">Wave</option>
+        <option value="submerged">Submerged (kelp)</option>
         <option value="schotter">Schotter (3D)</option>
         <option value="spiralStaircase">Spiral staircase</option>
         <option value="whaleBreach">Whale breach</option>
@@ -1043,6 +1046,77 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  dinoRibcage: function (rng, state) {
+    // Central spine + paired arcing ribs. Each rib is 4 short capsule
+    // segments at progressively larger angles off vertical, joined
+    // tip-to-tip — a piecewise-linear approximation of a curving rib.
+    const parts = [];
+    parts.push(makeCapsuleX(0, 0.15, 0, 0.34, 0.028));
+    const nRibs = 9;
+    const segLen = 0.06;
+    const segR = 0.013;
+    const yStart = 0.13;
+    for (let i = 0; i < nRibs; i++) {
+      const xSpine = -0.30 + i * (0.60 / (nRibs - 1));
+      for (let side = -1; side <= 1; side += 2) {
+        let yCur = yStart;
+        let zCur = 0;
+        for (let j = 0; j < 4; j++) {
+          const tilt = (j / 3) * 0.65 * side;
+          const dy = -Math.cos(tilt) * segLen * 2;
+          const dz = Math.sin(tilt) * segLen * 2;
+          const yMid = yCur + dy / 2;
+          const zMid = zCur + dz / 2;
+          const seg = makeCapsuleX(0, 0, 0, segLen, segR);
+          const vertical = rotateZ(seg, Math.PI / 2);
+          const tilted = rotateX(vertical, tilt);
+          parts.push(translate(tilted, xSpine, yMid, zMid));
+          yCur += dy;
+          zCur += dz;
+        }
+      }
+    }
+    return sdfUnion(parts, 0.012);
+  },
+  wave: function (rng, state) {
+    // A line of wave-crest shapes — small spheres along a sine curve
+    // across the foreground, smooth-merged into a continuous undulating
+    // ridge of water.
+    const parts = [];
+    const n = 14;
+    for (let i = 0; i < n; i++) {
+      const xt = i / (n - 1);
+      const x = -0.70 + xt * 1.40;
+      const y = -0.10 + Math.sin(xt * 8) * 0.06;
+      parts.push(makeSphere(x, y, 0, 0.080));
+    }
+    return sdfUnion(parts, 0.06);
+  },
+  submerged: function (rng, state) {
+    // 3 wavy kelp stalks rising from a low seabed hill. Each stalk is
+    // a stack of small spheres whose x-position undulates with height.
+    const parts = [];
+    parts.push(makeBlobSDFAt(rng, {
+      center: [0, -0.50, 0],
+      nSpheres: 3,
+      smoothK: 0.40,
+      spread: 1.5,
+      verticality: 0.3,
+      pointiness: 0,
+      scale: 0.55
+    }));
+    for (let s = 0; s < 3; s++) {
+      const xCenter = -0.32 + s * 0.32;
+      const n = 12;
+      for (let i = 0; i < n; i++) {
+        const yt = i / (n - 1);
+        const y = -0.35 + yt * 0.72;
+        const wob = Math.sin(yt * 6 + s * 2) * 0.045;
+        parts.push(makeSphere(xCenter + wob, y, 0, 0.034));
+      }
+    }
+    return sdfUnion(parts, 0.030);
   },
   schotter: function (rng, state) {
     // Grid of unit boxes, each row progressively more random in rotation
