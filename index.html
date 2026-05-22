@@ -70,6 +70,10 @@
         <option value="twinTowers">Twin towers</option>
         <option value="crackedSphere">Cracked sphere</option>
         <option value="doorway">Doorway</option>
+        <option value="bonsai">Bonsai</option>
+        <option value="gnarledTree">Gnarled tree</option>
+        <option value="hilltopTree">Hilltop tree</option>
+        <option value="spaceTime">Distorted space-time</option>
         <option value="revolutionProfile">Revolution profile (urn)</option>
         <option value="polyhedron">Polyhedron (octahedron)</option>
         <option value="astronaut">Astronaut on a tiny planet</option>
@@ -525,6 +529,16 @@ function displace(sdf, noiseFn, amp) {
 
 // Rotate the input position around the Y axis by `k * y` radians before
 // evaluating — twists any vertical form into a helix.
+// Generic position warp: offset the input p by a 3-vector returned by
+// `fn(x, y, z)` before evaluating. More general than twistY/bendY —
+// can do any sinusoidal/turbulent positional distortion.
+function warp(sdf, fn) {
+  return function (x, y, z) {
+    const w = fn(x, y, z);
+    return sdf(x + w[0], y + w[1], z + w[2]);
+  };
+}
+
 function twistY(sdf, k) {
   return function (x, y, z) {
     const c = Math.cos(k * y), s = Math.sin(k * y);
@@ -908,6 +922,75 @@ const SCENES = {
     }, 6, 0.10);
     const twistedPlume = twistY(plume, 1.6);
     return sdfUnion([body, twistedPlume], 0.08);
+  },
+  bonsai: function (rng, state) {
+    // Pot, gnarled trunk, two L-shaped branches, three foliage clusters.
+    // No recursion — every branch is explicit so the silhouette is
+    // controllable.
+    return sdfUnion([
+      makeBox(0, -0.30, 0, 0.14, 0.045, 0.10, 0.020),
+      makeCylinderY(0, -0.26, -0.06, 0, 0.026),
+      makeCylinderY(0.04, -0.06, 0.06, 0, 0.022),
+      makeCapsuleX(0.10, 0.06, 0, 0.06, 0.020),
+      makeCapsuleX(0.18, 0.06, 0, 0.04, 0.016),
+      makeCylinderY(0.20, 0.06, 0.16, 0, 0.014),
+      makeCapsuleX(-0.04, 0.04, 0, 0.05, 0.016),
+      makeCylinderY(-0.08, 0.04, 0.12, 0, 0.014),
+      makeSphere(0.21, 0.20, 0, 0.060),
+      makeSphere(-0.09, 0.16, 0, 0.050),
+      makeSphere(0.10, 0.12, 0, 0.048)
+    ], 0.022);
+  },
+  gnarledTree: function (rng, state) {
+    // Single old tree: thick trunk, four L-shaped side branches,
+    // five foliage spheres at the branch tips. Manually composed
+    // self-similar silhouette without a recursion helper.
+    return sdfUnion([
+      makeCylinderY(0, -0.45, 0.15, 0, 0.038),
+      makeCapsuleX(-0.10, -0.10, 0, 0.10, 0.024),
+      makeCylinderY(-0.20, -0.10, 0.08, 0, 0.020),
+      makeCapsuleX( 0.10, 0.00, 0, 0.10, 0.024),
+      makeCylinderY( 0.20, 0.00, 0.12, 0, 0.020),
+      makeCapsuleX(-0.06, 0.16, 0, 0.06, 0.018),
+      makeCylinderY(-0.12, 0.16, 0.30, 0, 0.016),
+      makeCapsuleX( 0.06, 0.18, 0, 0.05, 0.018),
+      makeCylinderY( 0.11, 0.18, 0.30, 0, 0.016),
+      makeSphere(-0.22, 0.10, 0, 0.075),
+      makeSphere( 0.22, 0.14, 0, 0.075),
+      makeSphere(-0.12, 0.34, 0, 0.065),
+      makeSphere( 0.11, 0.36, 0, 0.065),
+      makeSphere( 0.00, 0.30, 0, 0.075)
+    ], 0.028);
+  },
+  hilltopTree: function (rng, state) {
+    // A lone tree (trunk cylinder + spherical canopy) on top of a low
+    // rolling hill (wide flat blob).
+    const hill = makeBlobSDFAt(rng, {
+      center: [0, -0.30, 0],
+      nSpheres: 3,
+      smoothK: 0.35,
+      spread: 1.5,
+      verticality: 0.40,
+      pointiness: 0,
+      scale: 0.55
+    });
+    const trunk = makeCylinderY(0, -0.05, 0.16, 0, 0.022);
+    const canopy = makeSphere(0, 0.24, 0, 0.10);
+    return sdfUnion([hill, trunk, canopy], 0.030);
+  },
+  spaceTime: function (rng, state) {
+    // Tall vertical box pushed through a positional warp: high-frequency
+    // sinusoidal offsets in x and z that compound along y, ribboning
+    // and bending the form. Distorted-spacetime obelisk.
+    const obelisk = makeBox(0, 0.10, 0, 0.13, 0.45, 0.10, 0.020);
+    function distort(x, y, z) {
+      return [
+        Math.sin(y * 4.5) * 0.10 + Math.cos(z * 6) * 0.04,
+        Math.sin(x * 5) * 0.04,
+        Math.cos(y * 3.8 + 0.6) * 0.08
+      ];
+    }
+    return warp(obelisk, distort);
   },
   revolutionProfile: function (rng, state) {
     // Classical urn revolved around Y. Profile in (r, y):
