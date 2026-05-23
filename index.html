@@ -132,6 +132,8 @@
         <option value="scan" selected>Scan (4-angle)</option>
         <option value="crosshatch">Crosshatch (H + V)</option>
         <option value="vertical">Vertical only</option>
+        <option value="cell">Cell halftone</option>
+        <option value="monet">Monet brushstrokes</option>
         <option value="isoDepth">Iso-depth contours</option>
         <option value="projNormal">Projected normal</option>
         <option value="principal">Principal curvature</option>
@@ -2380,6 +2382,141 @@ function generateHatches(state, buf) {
 }
 
 // ============================================================
+// Cell hatcher: port of VectorFriend's modules/hatching.js.
+//
+// Divide the image into a grid of square cells. For each cell that lands
+// on the blob surface, compute the average brightness and emit up to
+// maxHatches horizontal hatches whose count is proportional to darkness.
+// The hatch lines are evenly distributed within the cell's vertical
+// slots so the placement reads as a halftone screen. A small Perlin
+// wobble can be applied to each line (line wobble parameter).
+//
+// Unlike the scan-line hatcher (continuous strokes broken by surface
+// transitions), each cell contributes its own short strokes — a tight
+// halftone look distinct from any of the curve modes.
+// ============================================================
+function generateCellHatches(state, buf) {
+  const paths = [];
+  const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
+  const maxHatches = 12;
+  const cellSize = baseSpacing * maxHatches;
+  const cellsX = Math.max(2, Math.round((SX_MAX - SX_MIN) / cellSize));
+  const actualCellSize = (SX_MAX - SX_MIN) / cellsX;
+  const cellsY = Math.max(2, Math.round((SY_MAX - SY_MIN) / actualCellSize));
+  const wobbleNoise = makeNoise2D(state.seed + ':cellWobble');
+  const wobbleAmp = baseSpacing * 0.30;
+  for (let cy = 0; cy < cellsY; cy++) {
+    const cellY0 = SY_MIN + cy * actualCellSize;
+    const cellY1 = cellY0 + actualCellSize;
+    for (let cx = 0; cx < cellsX; cx++) {
+      const cellX0 = SX_MIN + cx * actualCellSize;
+      const cellX1 = cellX0 + actualCellSize;
+      let total = 0, count = 0;
+      const subStep = actualCellSize / 6;
+      for (let sy = cellY0; sy < cellY1; sy += subStep) {
+        for (let sx = cellX0; sx < cellX1; sx += subStep) {
+          const idx = bufIdx(buf, sx, sy);
+          if (idx >= 0 && buf.surface[idx] === 1) {
+            let v = buf.light[idx] - materialDarknessShift(buf, idx);
+            if (buf.shadow[idx]) v -= 0.30;
+            total += Math.max(0, Math.min(1, v));
+            count++;
+          }
+        }
+      }
+      if (count === 0) continue;
+      const avg = total / count;
+      const numHatches = Math.floor((1 - avg) * maxHatches);
+      if (numHatches === 0) continue;
+      for (let i = 0; i < numHatches; i++) {
+        const slotIdx = Math.round((i + 1) * (maxHatches / (numHatches + 1))) - 1;
+        if (slotIdx < 0 || slotIdx >= maxHatches) continue;
+        const slotY = cellY0 + (slotIdx + 0.5) / maxHatches * actualCellSize;
+        const segs = 8;
+        let pts = [];
+        for (let s = 0; s <= segs; s++) {
+          const t = s / segs;
+          const x = cellX0 + t * actualCellSize;
+          const w = (wobbleNoise(x * 8, slotY * 8) - 0.5) * wobbleAmp * 2;
+          const ySamp = slotY + w;
+          const idx = bufIdx(buf, x, ySamp);
+          if (idx >= 0 && buf.surface[idx] === 1) {
+            pts.push([x, ySamp]);
+          } else if (pts.length >= 2) {
+            paths.push(pts);
+            pts = [];
+          } else {
+            pts = [];
+          }
+        }
+        if (pts.length >= 2) paths.push(pts);
+      }
+    }
+  }
+  return paths;
+}
+
+// ============================================================
+// Monet hatcher: short wavy brushstrokes scattered on the blob surface.
+// Each stroke is a curved polyline of ~8 segments centred on its seed
+// point, oriented along the projected-normal perpendicular with a small
+// random direction jitter. A sinusoidal perpendicular wobble overlaid
+// on the stroke gives the brush-mark feel. Stroke density is driven by
+// per-pixel darkness so unlit regions accumulate strokes.
+// ============================================================
+function generateMonetHatches(state, buf) {
+  const paths = [];
+  const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
+  const strokeLen = baseSpacing * 7;
+  const seedStep = baseSpacing * 0.9;
+  const wobbleAmp = baseSpacing * 0.45;
+  const dirNoise = makeNoise2D(state.seed + ':monetDir');
+  // Cheap deterministic hash for the per-seed dropout test.
+  function hash01(sx, sy) {
+    const h = Math.sin(sx * 1234.5 + sy * 5678.9 + 0.137) * 43758.5;
+    return h - Math.floor(h);
+  }
+  for (let sy = SY_MIN; sy <= SY_MAX; sy += seedStep) {
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += seedStep) {
+      const idx = bufIdx(buf, sx, sy);
+      if (idx < 0 || buf.surface[idx] !== 1) continue;
+      const darkness = Math.min(1, Math.max(0,
+        (1 - buf.light[idx]) +
+        (buf.shadow[idx] ? 0.30 : 0) +
+        materialDarknessShift(buf, idx)
+      ));
+      // Probability of placing a stroke ∝ darkness. The 1.4 multiplier
+      // ensures dark regions reliably fire while mid-tones thin out.
+      if (hash01(sx, sy) > darkness * 1.4) continue;
+      const nx = buf.nx[idx], ny = buf.ny[idx];
+      let dirX = -ny, dirY = nx;
+      const m = Math.hypot(dirX, dirY);
+      if (m < 1e-4) { dirX = 1; dirY = 0; } else { dirX /= m; dirY /= m; }
+      const jitter = (dirNoise(sx * 5, sy * 5) - 0.5) * 0.6;
+      const cosJ = Math.cos(jitter), sinJ = Math.sin(jitter);
+      const dx = dirX * cosJ - dirY * sinJ;
+      const dy = dirX * sinJ + dirY * cosJ;
+      const segs = 8;
+      const pts = [];
+      let allOn = true;
+      for (let i = -segs / 2; i <= segs / 2; i++) {
+        const t = i / segs;
+        const px = sx + dx * t * strokeLen;
+        const py = sy + dy * t * strokeLen;
+        const wob = Math.sin(t * Math.PI * 3) * wobbleAmp;
+        const wpx = px - dy * wob;
+        const wpy = py + dx * wob;
+        const sIdx = bufIdx(buf, wpx, wpy);
+        if (sIdx < 0 || buf.surface[sIdx] !== 1) { allOn = false; break; }
+        pts.push([wpx, wpy]);
+      }
+      if (allOn && pts.length >= 2) paths.push(pts);
+    }
+  }
+  return paths;
+}
+
+// ============================================================
 // Crosshatch hatcher: just horizontals + verticals. Two-tier threshold:
 // horizontals always draw on the surface; verticals only draw in regions
 // darker than 'crossThreshold'. Lightweight alternative to the 4-angle
@@ -3902,6 +4039,8 @@ async function doRender() {
     switch (state.hatchStyle) {
       case 'crosshatch': blob = generateCrosshatchHatches(state, buf);             break;
       case 'vertical':   blob = generateVerticalHatches(state, buf);               break;
+      case 'cell':       blob = generateCellHatches(state, buf);                   break;
+      case 'monet':      blob = generateMonetHatches(state, buf);                  break;
       case 'isoDepth':   blob = generateCurveHatches(state, buf, fieldIsoDepth);   break;
       case 'projNormal': blob = generateCurveHatches(state, buf, fieldProjNormal); break;
       case 'principal':  blob = generateCurveHatches(state, buf, fieldPrincipal);  break;
