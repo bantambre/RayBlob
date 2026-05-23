@@ -148,6 +148,7 @@
         <option value="paperGrain">Paper grain</option>
         <option value="arcs">Concentric arcs</option>
         <option value="stars">Stars</option>
+        <option value="cellular">Cellular automata</option>
         <option value="none">None (empty sky)</option>
       </select>
     </div>
@@ -3312,6 +3313,69 @@ function generateSkyArcs(state, buf) {
 }
 
 // ============================================================
+// Sky cellular automata: classic Conway B3/S23 seeded at 30% density,
+// stepped a few generations, then alive cells rendered as short
+// horizontal dashes. Port of the cellular-automata-as-texture idea from
+// VectorFriend's Genuary/cellularautomata. Distinct from the noise-based
+// sky styles — produces clusters of dashes rather than uniform speckle.
+// ============================================================
+function generateSkyCellular(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const cellsX = 80;
+  const cellSize = (SX_MAX - SX_MIN) / cellsX;
+  const skyTop = SY_MAX;
+  const skyBot = Math.max(syHorizon, SY_MIN);
+  const skyHeight = skyTop - skyBot;
+  const cellsY = Math.max(2, Math.round(skyHeight / cellSize));
+  const rng = makeRng(state.seed + ':cellularSky');
+  // Initialise with ~30 % alive cells.
+  let grid = new Uint8Array(cellsX * cellsY);
+  for (let i = 0; i < grid.length; i++) grid[i] = rng() < 0.30 ? 1 : 0;
+  // Step Conway's B3/S23 for a few generations so clusters stabilise.
+  const NUM_ITER = 4;
+  for (let iter = 0; iter < NUM_ITER; iter++) {
+    const next = new Uint8Array(cellsX * cellsY);
+    for (let y = 0; y < cellsY; y++) {
+      for (let x = 0; x < cellsX; x++) {
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = (x + dx + cellsX) % cellsX;
+            const ny = y + dy;
+            if (ny < 0 || ny >= cellsY) continue;
+            n += grid[ny * cellsX + nx];
+          }
+        }
+        const alive = grid[y * cellsX + x];
+        const survives = alive && (n === 2 || n === 3);
+        const born = !alive && (n === 3);
+        next[y * cellsX + x] = (survives || born) ? 1 : 0;
+      }
+    }
+    grid = next;
+  }
+  // Render alive cells as short horizontal dashes in the sky region.
+  const dashLen = cellSize * 0.75;
+  for (let y = 0; y < cellsY; y++) {
+    for (let x = 0; x < cellsX; x++) {
+      if (!grid[y * cellsX + x]) continue;
+      const cx = SX_MIN + (x + 0.5) * cellSize;
+      const cy = skyTop - (y + 0.5) * cellSize;
+      if (cy <= syHorizon) continue;
+      const idx = bufIdx(buf, cx, cy);
+      if (idx < 0 || buf.surface[idx] !== 0) continue;
+      paths.push([
+        [cx - dashLen / 2, cy],
+        [cx + dashLen / 2, cy]
+      ]);
+    }
+  }
+  return paths;
+}
+
+// ============================================================
 // Sky clouds: horizontal lines in the top third of the page, with a
 // wavy noise displacement so they read as cloud strands rather than
 // a horizon gradient. Drawn only where the buffer reports sky (surface=0).
@@ -4058,6 +4122,7 @@ async function doRender() {
       case 'paperGrain':    sky = generateSkyPaperGrain(state, buf); break;
       case 'arcs':          sky = generateSkyArcs(state, buf); break;
       case 'stars':         sky = generateStarSky(state, buf); break;
+      case 'cellular':      sky = generateSkyCellular(state, buf); break;
       case 'none':          sky = []; break;
       case 'splotchy':      sky = generateCloudsSplotchy(state, buf); break;
       // The options below are hidden in the UI but still callable from URL
