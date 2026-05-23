@@ -50,6 +50,7 @@
         <option value="monoliths">Monoliths</option>
         <option value="arch">Cave arch</option>
         <option value="lighthouse">Lighthouse</option>
+        <option value="cairn">Cairn</option>
         <option value="iceberg">Iceberg</option>
         <option value="cone">Cone</option>
         <option value="pyramid">Pyramid</option>
@@ -1009,33 +1010,49 @@ const SCENES = {
   },
   lighthouse: {
     ui: [
+      { id: 'rockStacks',      label: 'Rock stacks',    type: 'int',    min: 1,    max: 3,    step: 1,    default: 2    },
       { id: 'rockShards',      label: 'Rock shards',    type: 'int',    min: 4,    max: 8,    step: 1,    default: 6    },
       { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.20, max: 0.60, step: 0.02, default: 0.40 },
       { id: 'rockVerticality', label: 'Rock vert.',     type: 'number', min: 0.6,  max: 2.2,  step: 0.1,  default: 1.4  },
       { id: 'rockSpread',      label: 'Rock spread',    type: 'number', min: 0.20, max: 0.80, step: 0.05, default: 0.40 },
       { id: 'rockSmoothK',     label: 'Rock smooth K',  type: 'number', min: 0.00, max: 0.20, step: 0.01, default: 0.03 },
+      { id: 'rockTaper',       label: 'Stack taper',    type: 'number', min: 0.10, max: 0.70, step: 0.05, default: 0.40 },
       { id: 'rockJaggedness',  label: 'Rock jaggedness',type: 'number', min: 0.00, max: 0.12, step: 0.005, default: 0.04 }
     ],
     build: function (rng, state, params) {
       // Lighthouse perched on a faceted monument-style rock, off-centre
       // to the right. The rock is composed of octahedra (sharp diamond
       // facets) instead of spheres, so the silhouette reads as edgy
-      // basalt rather than a soft blob. An optional noise displacement
-      // adds fine surface jaggedness on top.
+      // basalt rather than a soft blob. With Rock stacks > 1 the rock
+      // is built as multiple narrowing octahedral clusters stacked on
+      // top of each other — a wider base + narrower spire feel. An
+      // optional noise displacement adds fine surface jaggedness.
       //
       // The light beam emanates horizontally from the lamp room as
       // negative-space — the buffer marks the wedge as non-sky so the
       // user's chosen sky texture naturally vanishes inside it.
       const baseX = 0.42;
-      let rock = makeOctahedralBlobAt(rng, {
-        center: [baseX, -0.40, 0],
-        nSpheres: params.rockShards,
-        smoothK: params.rockSmoothK,
-        spread: params.rockSpread,
-        verticality: params.rockVerticality,
-        pointiness: 0.20,
-        scale: params.rockScale
-      });
+      const stacks = params.rockStacks;
+      const stackParts = [];
+      let stackY = -0.45;
+      for (let s = 0; s < stacks; s++) {
+        const t = stacks <= 1 ? 0 : s / (stacks - 1);
+        const stackScale  = params.rockScale  * (1 - t * params.rockTaper);
+        const stackSpread = params.rockSpread * (1 - t * params.rockTaper * 0.6);
+        const stackShards = Math.max(3, params.rockShards - s);
+        stackParts.push(makeOctahedralBlobAt(rng, {
+          center: [baseX, stackY, 0],
+          nSpheres: stackShards,
+          smoothK: params.rockSmoothK,
+          spread: stackSpread,
+          verticality: params.rockVerticality,
+          pointiness: 0.20,
+          scale: stackScale
+        }));
+        // Step y up by roughly the vertical extent of this stack.
+        stackY += stackScale * params.rockVerticality * 0.85;
+      }
+      let rock = sdfUnion(stackParts, 0.025);
       // Optional surface jaggedness — two-octave 3-D noise displaces the
       // octahedral silhouette, breaking the clean diamond edges into
       // fractured rocky detail when the slider is above 0.
@@ -1060,6 +1077,54 @@ const SCENES = {
           halfAngleDeg: 7
         }
       };
+    }
+  },
+  cairn: {
+    ui: [
+      { id: 'stacks',         label: 'Stacks',         type: 'int',    min: 3,    max: 9,    step: 1,    default: 5    },
+      { id: 'shardsPerStack', label: 'Shards/stack',   type: 'int',    min: 2,    max: 6,    step: 1,    default: 3    },
+      { id: 'baseScale',      label: 'Base scale',     type: 'number', min: 0.15, max: 0.50, step: 0.02, default: 0.32 },
+      { id: 'taper',          label: 'Taper',          type: 'number', min: 0.10, max: 0.85, step: 0.05, default: 0.55 },
+      { id: 'flatness',       label: 'Flatness',       type: 'number', min: 0.30, max: 1.20, step: 0.05, default: 0.55 },
+      { id: 'wobble',         label: 'Wobble',         type: 'number', min: 0.00, max: 0.15, step: 0.01, default: 0.04 },
+      { id: 'smoothK',        label: 'Smooth K',       type: 'number', min: 0.00, max: 0.10, step: 0.005, default: 0.015 },
+      { id: 'jaggedness',     label: 'Jaggedness',     type: 'number', min: 0.00, max: 0.10, step: 0.005, default: 0.025 }
+    ],
+    build: function (rng, state, params) {
+      // Cairn — a pyramidal stack of flat octahedral rocks. Each
+      // successive stack is `taper` smaller than the previous and
+      // sits with a small lateral `wobble` for natural imperfection.
+      // `flatness` < 1 squashes each stack vertically so the rocks
+      // read as stones rather than spires; > 1 stretches them.
+      const stacks = params.stacks;
+      const rocks = [];
+      let cy = -0.55;
+      for (let i = 0; i < stacks; i++) {
+        const t = stacks <= 1 ? 0 : i / (stacks - 1);
+        const scale = params.baseScale * (1 - t * params.taper);
+        const cx = (rng() - 0.5) * params.wobble;
+        const cz = (rng() - 0.5) * params.wobble;
+        rocks.push(makeOctahedralBlobAt(rng, {
+          center: [cx, cy, cz],
+          nSpheres: params.shardsPerStack,
+          smoothK: params.smoothK,
+          spread: 0.30,
+          verticality: params.flatness,
+          pointiness: 0,
+          scale: scale
+        }));
+        // Step y up by ~ this stack's vertical extent.
+        cy += scale * params.flatness * 1.4;
+      }
+      let cairn = sdfUnion(rocks, 0.025);
+      if (params.jaggedness > 0) {
+        const n3 = makeNoise3D(state.seed + ':cairn');
+        cairn = displace(cairn, function (x, y, z) {
+          return 0.65 * n3(x * 9, y * 9, z * 9) +
+                 0.35 * n3(x * 22, y * 22, z * 22);
+        }, params.jaggedness);
+      }
+      return cairn;
     }
   },
   cone: function (rng, state) {
