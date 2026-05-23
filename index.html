@@ -248,6 +248,27 @@ function setupCamera(opts) {
 // surface normal of the blob.
 const HATCH_ANGLES = [0, Math.PI / 4, Math.PI / 2, 3 * Math.PI / 4];
 
+// Per-pixel material id (buf.material[idx]) is set by scenes via their
+// materialFn. Each id selects a row of MATERIAL_PROPS that shifts the
+// hatcher's per-pixel darkness up or down — positive shifts more hatching
+// (denser/darker), negative shifts less (sparser/lighter). 0 is the
+// default and has no effect, so scenes that don't set material at all
+// render exactly as before.
+const MATERIAL_PROPS = [
+  { darknessShift:  0.00 },  // 0: default
+  { darknessShift:  0.30 },  // 1: dense / shadowed (e.g. underwater)
+  { darknessShift: -0.30 },  // 2: bright / sparse (e.g. ice in sun)
+  { darknessShift:  0.18 },  // 3: medium dense
+  { darknessShift: -0.18 },  // 4: medium sparse
+  { darknessShift:  0.45 },  // 5: very dense (near-solid black)
+  { darknessShift: -0.45 }   // 6: very sparse (near highlights only)
+];
+function materialDarknessShift(buf, idx) {
+  const m = buf.material[idx];
+  const p = MATERIAL_PROPS[m];
+  return p ? p.darknessShift : 0;
+}
+
 // 1 sx-unit = 2 inches = 50.8mm  ⇒  WORLD_PER_MM = 0.5 / 25.4
 const WORLD_PER_MM = 2.0 / (W_IN * 25.4);
 
@@ -1008,7 +1029,15 @@ const SCENES = {
       return 0.65 * n3(x * 4, y * 4, z * 4) +
              0.35 * n3(x * 11, y * 11, z * 11);
     }
-    return displace(smoothBerg, jagged, 0.09);
+    return {
+      sdf: displace(smoothBerg, jagged, 0.09),
+      // Above the waterline (y > 0) reads as bright sun-struck ice;
+      // below the waterline reads as dense/dark submerged mass. The
+      // hatcher consults MATERIAL_PROPS to swing density either way.
+      materialFn: function (x, y, z) {
+        return y > 0 ? 2 : 1;
+      }
+    };
   },
   lighthouseIsland: function (rng, state) {
     // Lighthouse perched on a rocky island. Tune Sky style and Ground
@@ -1978,7 +2007,7 @@ function snapAngle(a) {
   return bestI;
 }
 
-function renderSceneBuffer(state, sdf) {
+function renderSceneBuffer(state, sdf, materialFn) {
   const W = state.bufRes;
   const H = Math.round(W * (SY_MAX - SY_MIN) / (SX_MAX - SX_MIN));
   const N = W * H;
@@ -1989,7 +2018,8 @@ function renderSceneBuffer(state, sdf) {
     light: new Float32Array(N),
     depth: new Float32Array(N),
     primary: new Uint8Array(N),
-    shadow: new Uint8Array(N)    // 1 if occluded from the light source
+    shadow: new Uint8Array(N),   // 1 if occluded from the light source
+    material: new Uint8Array(N)  // 0=default; scenes may set 1..255 per pixel
   };
 
   let lL = Math.hypot(state.lx, state.ly, state.lz) || 1;
@@ -2023,6 +2053,16 @@ function renderSceneBuffer(state, sdf) {
       buf.depth[idx] = t;
       const ld = Math.max(0, n[0] * L[0] + n[1] * L[1] + n[2] * L[2]);
       buf.light[idx] = 0.15 + 0.85 * ld;
+
+      // Scene-supplied per-pixel material id. Only computed for blob
+      // hits (hit === 1) — ground and sky always sit at material 0.
+      if (hit === 1 && materialFn) {
+        const wx = CAM[0] + dx * t;
+        const wy = CAM[1] + dy * t;
+        const wz = CAM[2] + dz * t;
+        const m = materialFn(wx, wy, wz);
+        buf.material[idx] = (m >= 0 && m <= 255) ? (m | 0) : 0;
+      }
 
       // Shadow ray. For blobs, offset along the surface normal. For ground,
       // the surface normal is (0, 1, 0) so we offset slightly upward.
@@ -2082,10 +2122,13 @@ function shouldDrawAt(buf, sx, sy, angleIdx) {
 
   // Blob: tiered crosshatch by offset from primary. Cast shadow pushes
   // the effective darkness up, so shadowed regions reach further
-  // crosshatch tiers than their Lambert lighting alone would.
+  // crosshatch tiers than their Lambert lighting alone would. The
+  // scene-supplied material id can shift darkness further (denser or
+  // sparser hatching per region — see MATERIAL_PROPS).
   const offset = (angleIdx - pri + 4) % 4;
   let darkness = 1 - buf.light[idx];
   if (buf.shadow[idx]) darkness = Math.min(1, darkness + 0.35);
+  darkness = Math.max(0, Math.min(1, darkness + materialDarknessShift(buf, idx)));
   const T = [0, 0.30, 0.55, 0.78];
   return darkness > T[offset];
 }
@@ -2175,7 +2218,8 @@ function generateCrosshatchHatches(state, buf) {
           const idx = bufIdx(buf, sx, sy);
           if (idx >= 0 && buf.surface[idx] === 1) {
             const darkness = (1 - buf.light[idx]) +
-                             (buf.shadow[idx] ? 0.30 : 0);
+                             (buf.shadow[idx] ? 0.30 : 0) +
+                             materialDarknessShift(buf, idx);
             draw = (a === 0) ? true : (darkness > crossThreshold);
           }
         }
@@ -2435,7 +2479,7 @@ function generateCurveHatches(state, buf, fieldFn) {
       if (ix < 0 || ix >= W || iy < 0 || iy >= H) return false;
       if (buf.surface[iy * W + ix] !== 1) return false;
       const i = iy * W + ix;
-      const dark = (1 - buf.light[i]) + (buf.shadow[i] ? 0.30 : 0);
+      const dark = (1 - buf.light[i]) + (buf.shadow[i] ? 0.30 : 0) + materialDarknessShift(buf, i);
       if (dark < darkThreshold) return false;
       const r = spacingPx;
       const x0 = Math.max(0, ix - r), x1 = Math.min(W - 1, ix + r);
@@ -2459,7 +2503,7 @@ function generateCurveHatches(state, buf, fieldFn) {
         if (ix < 0 || ix >= W || iy < 0 || iy >= H) break;
         if (buf.surface[iy * W + ix] !== 1) break;
         const i = iy * W + ix;
-        const dark = (1 - buf.light[i]) + (buf.shadow[i] ? 0.30 : 0);
+        const dark = (1 - buf.light[i]) + (buf.shadow[i] ? 0.30 : 0) + materialDarknessShift(buf, i);
         if (dark < darkThreshold - 0.10) break;
         const f = fieldPerp(buf, ix, iy);
         if (!f) break;
@@ -3632,19 +3676,20 @@ async function doRender() {
       const params = readSceneParams(state.scene);
       sceneResult = sceneEntry.build(rng, state, params);
     }
-    let sdf, sceneCamera = null;
+    let sdf, sceneCamera = null, sceneMaterialFn = null;
     if (typeof sceneResult === 'function') {
       sdf = sceneResult;
     } else {
       sdf = sceneResult.sdf;
       sceneCamera = sceneResult.camera || null;
+      sceneMaterialFn = sceneResult.materialFn || null;
     }
     setupCamera(sceneCamera || { tiltDeg: state.camTilt });
 
     setStatus('Raymarching scene buffer…');
     await tick();
     const t0 = performance.now();
-    const buf = renderSceneBuffer(state, sdf);
+    const buf = renderSceneBuffer(state, sdf, sceneMaterialFn);
     applyToneMap(buf, state);
     const t1 = performance.now();
 
