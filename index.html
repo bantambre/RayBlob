@@ -1021,7 +1021,7 @@ const SCENES = {
       { id: 'beamSpreadDeg',   label: 'Ray spread (°)', type: 'number', min: 4,    max: 60,   step: 1,    default: 7    },
       { id: 'rockStacks',      label: 'Rock stacks',    type: 'int',    min: 1,    max: 3,    step: 1,    default: 2    },
       { id: 'rockShards',      label: 'Rock shards',    type: 'int',    min: 4,    max: 8,    step: 1,    default: 6    },
-      { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.20, max: 1.50, step: 0.05, default: 0.55 },
+      { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.20, max: 1.50, step: 0.05, default: 0.70 },
       { id: 'rockVerticality', label: 'Rock vert.',     type: 'number', min: 0.6,  max: 3.5,  step: 0.1,  default: 1.6  },
       { id: 'rockSpread',      label: 'Rock spread',    type: 'number', min: 0.20, max: 1.50, step: 0.05, default: 0.50 },
       { id: 'rockSmoothK',     label: 'Rock smooth K',  type: 'number', min: 0.00, max: 0.20, step: 0.01, default: 0.03 },
@@ -1060,11 +1060,12 @@ const SCENES = {
         const sp = params.rockSpread * (1 - t * params.rockTaper * 0.6);
         scales.push(sc);
         spreads.push(sp);
-        // The vertical extent of the blob has two contributors:
-        //   - the central octahedron itself: 0.47 * sc (no V scaling — L1-ball)
-        //   - additional shards scattered by 0.3 * spread * V * sc in y
-        // Worst-case upward reach ≈ sc * (0.47 + 0.3 * spread * V).
-        halfHeights.push(sc * (0.47 + 0.3 * sp * params.rockVerticality));
+        // Anchor on the CENTRAL octahedron's half-extent (sc * 0.475).
+        // Additional shards inside the blob may scatter a bit further up
+        // — that's fine; the smooth-min union with the lighthouse body
+        // blends them naturally. The previous worst-case formula buried
+        // most of the rock below the horizon, leaving only the tip visible.
+        halfHeights.push(sc * 0.475);
       }
       // Topmost stack: its TOP is at TOP_Y → its centre is TOP_Y minus
       // its own half-height.
