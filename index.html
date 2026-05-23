@@ -2090,7 +2090,9 @@ const builderState = {
     { id: 'L2', type: 'box',    params: { cx: 0, cy: -0.45, cz: 0, hx: 0.40, hy: 0.06, hz: 0.30, round: 0.01 }, ops: [] }
   ],
   nextId: 3,
-  smoothK: 0.05
+  smoothK: 0.05,
+  cameraTilt: 6,
+  cameraYaw: 0
 };
 
 SCENES.builder = {
@@ -2120,8 +2122,16 @@ SCENES.builder = {
       }
       sdfs.push(sdf);
     }
-    if (sdfs.length === 0) return makeSphere(0, -10, 0, 0.001);
-    return sdfUnion(sdfs, Math.max(0, builderState.smoothK || 0));
+    const sdf = sdfs.length === 0
+      ? makeSphere(0, -10, 0, 0.001)
+      : sdfUnion(sdfs, Math.max(0, builderState.smoothK || 0));
+    return {
+      sdf: sdf,
+      camera: {
+        tiltDeg: builderState.cameraTilt,
+        yawDeg: builderState.cameraYaw
+      }
+    };
   },
   renderCustomUi: function (panel) {
     // Helper: render a single param input (numeric or enum) with the
@@ -2151,6 +2161,12 @@ SCENES.builder = {
     html += '<div class="field"><label>Smooth K</label>' +
             '<input id="builder_smoothK" type="number" min="0" max="0.5" step="0.02" value="' +
             builderState.smoothK + '"></div>';
+    html += '<div class="field"><label>Cam tilt (°)</label>' +
+            '<input id="builder_cameraTilt" type="number" min="-30" max="40" step="0.5" value="' +
+            builderState.cameraTilt + '"></div>';
+    html += '<div class="field"><label>Cam yaw (°)</label>' +
+            '<input id="builder_cameraYaw" type="number" min="-90" max="90" step="1" value="' +
+            builderState.cameraYaw + '"></div>';
     for (let i = 0; i < builderState.layers.length; i++) {
       const layer = builderState.layers[i];
       const def = BUILDER_PRIMITIVES[layer.type];
@@ -2294,12 +2310,18 @@ SCENES.builder = {
       SCENES.builder.renderCustomUi(panel);
     });
 
-    // Wire smoothK input.
+    // Wire smoothK + camera inputs.
     const sk = document.getElementById('builder_smoothK');
     sk.addEventListener('change', () => {
       builderState.smoothK = parseFloat(sk.value);
     });
     sk.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
+    const ct = document.getElementById('builder_cameraTilt');
+    ct.addEventListener('change', () => { builderState.cameraTilt = parseFloat(ct.value); });
+    ct.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
+    const cy = document.getElementById('builder_cameraYaw');
+    cy.addEventListener('change', () => { builderState.cameraYaw = parseFloat(cy.value); });
+    cy.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
 
     // Wire export buttons.
     document.getElementById('builder_copyUrl').addEventListener('click', () => {
@@ -2331,6 +2353,8 @@ SCENES.builder = {
 function serialiseBuilder() {
   const minimal = {
     s: builderState.smoothK,
+    ct: builderState.cameraTilt,
+    cy: builderState.cameraYaw,
     l: builderState.layers.map(function (layer) {
       return {
         t: layer.type,
@@ -2353,6 +2377,8 @@ function deserialiseBuilder(encoded) {
     const obj = JSON.parse(decodeURIComponent(escape(atob(encoded))));
     if (!obj || !obj.l) return false;
     builderState.smoothK = obj.s != null ? obj.s : 0.05;
+    builderState.cameraTilt = obj.ct != null ? obj.ct : 6;
+    builderState.cameraYaw  = obj.cy != null ? obj.cy : 0;
     builderState.layers = obj.l.map(function (L, i) {
       return {
         id: 'L' + (i + 1),
@@ -2413,6 +2439,19 @@ function builderToJs() {
   const lines = builderState.layers.map(function (layer) {
     return '    ' + wrapOps(primCall(layer), layer.ops);
   });
+  const ct = builderState.cameraTilt || 0;
+  const cy = builderState.cameraYaw  || 0;
+  const hasCamera = (ct !== 0 || cy !== 0);
+  if (hasCamera) {
+    return 'SCENES.myScene = function (rng, state) {\n' +
+           '  return {\n' +
+           '    sdf: sdfUnion([\n' +
+           lines.join(',\n') + '\n' +
+           '    ], ' + (builderState.smoothK || 0) + '),\n' +
+           '    camera: { tiltDeg: ' + ct + ', yawDeg: ' + cy + ' }\n' +
+           '  };\n' +
+           '};';
+  }
   return 'SCENES.myScene = function (rng, state) {\n' +
          '  return sdfUnion([\n' +
          lines.join(',\n') + '\n' +
