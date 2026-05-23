@@ -361,6 +361,36 @@ function makeBlobSDFAt(rng, opts) {
   };
 }
 
+// Octahedral analogue of makeBlobSDFAt — same parameter shape (centre,
+// nSpheres, smoothK, spread, verticality, pointiness, scale) but each
+// primitive is an octahedron instead of an ellipsoidal sphere. With
+// smoothK ≈ 0 the union preserves the diamond-face silhouettes, so the
+// result reads as a faceted/edgy rock instead of a soft blob.
+function makeOctahedralBlobAt(rng, opts) {
+  const center  = opts.center || [0, 0, 0];
+  const n       = opts.nSpheres || 4;
+  const smoothK = opts.smoothK == null ? 0 : opts.smoothK;
+  const spread  = opts.spread  == null ? 1 : opts.spread;
+  const V       = opts.verticality == null ? 1 : opts.verticality;
+  const P       = opts.pointiness || 0;
+  const sc      = opts.scale == null ? 1 : opts.scale;
+  const shards = [];
+  shards.push(makeOctahedron(
+    center[0], center[1], center[2],
+    (0.40 + rng() * 0.15) * sc
+  ));
+  for (let i = 1; i < n; i++) {
+    const cyRaw = ((rng() - 0.5) * 0.6 * spread) * V * sc;
+    const taper = cyRaw > 0 ? Math.max(0.15, 1 - P * cyRaw) : 1;
+    const cx = center[0] + (rng() - 0.5) * 0.7 * spread * taper * sc;
+    const cy = center[1] + cyRaw;
+    const cz = center[2] + (rng() - 0.5) * 0.5 * spread * taper * sc;
+    const sz = (0.22 + rng() * 0.25) * Math.max(0.3, taper) * sc;
+    shards.push(makeOctahedron(cx, cy, cz, sz));
+  }
+  return sdfUnion(shards, smoothK);
+}
+
 // ============================================================
 // SDF composition engines
 // ============================================================
@@ -979,31 +1009,43 @@ const SCENES = {
   },
   lighthouse: {
     ui: [
-      { id: 'rockSpheres',     label: 'Rock spheres', type: 'int',    min: 4,    max: 8,   step: 1,    default: 6   },
-      { id: 'rockScale',       label: 'Rock scale',   type: 'number', min: 0.20, max: 0.60, step: 0.02, default: 0.40 },
-      { id: 'rockVerticality', label: 'Rock vert.',   type: 'number', min: 0.6,  max: 2.2, step: 0.1,  default: 1.4 },
-      { id: 'rockSpread',      label: 'Rock spread',  type: 'number', min: 0.20, max: 0.80, step: 0.05, default: 0.40 },
-      { id: 'rockSmoothK',     label: 'Rock smooth K',type: 'number', min: 0.05, max: 0.40, step: 0.02, default: 0.14 }
+      { id: 'rockShards',      label: 'Rock shards',    type: 'int',    min: 4,    max: 8,    step: 1,    default: 6    },
+      { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.20, max: 0.60, step: 0.02, default: 0.40 },
+      { id: 'rockVerticality', label: 'Rock vert.',     type: 'number', min: 0.6,  max: 2.2,  step: 0.1,  default: 1.4  },
+      { id: 'rockSpread',      label: 'Rock spread',    type: 'number', min: 0.20, max: 0.80, step: 0.05, default: 0.40 },
+      { id: 'rockSmoothK',     label: 'Rock smooth K',  type: 'number', min: 0.00, max: 0.20, step: 0.01, default: 0.03 },
+      { id: 'rockJaggedness',  label: 'Rock jaggedness',type: 'number', min: 0.00, max: 0.12, step: 0.005, default: 0.04 }
     ],
     build: function (rng, state, params) {
-      // Lighthouse perched on a tall monument-style rock, off-centre to
-      // the right. The light beam emanates horizontally from the lamp
-      // room and is rendered as NEGATIVE SPACE: the buffer marks beam
-      // pixels as non-sky, so whatever sky texture the user picks
-      // naturally vanishes inside the cone.
+      // Lighthouse perched on a faceted monument-style rock, off-centre
+      // to the right. The rock is composed of octahedra (sharp diamond
+      // facets) instead of spheres, so the silhouette reads as edgy
+      // basalt rather than a soft blob. An optional noise displacement
+      // adds fine surface jaggedness on top.
+      //
+      // The light beam emanates horizontally from the lamp room as
+      // negative-space — the buffer marks the wedge as non-sky so the
+      // user's chosen sky texture naturally vanishes inside it.
       const baseX = 0.42;
-      // Monument rock — composed of `nSpheres` smaller spheres (smaller
-      // than the monolith preset) so the user can dial in the rock's
-      // mass via the panel.
-      const rock = makeBlobSDFAt(rng, {
+      let rock = makeOctahedralBlobAt(rng, {
         center: [baseX, -0.40, 0],
-        nSpheres: params.rockSpheres,
+        nSpheres: params.rockShards,
         smoothK: params.rockSmoothK,
         spread: params.rockSpread,
         verticality: params.rockVerticality,
         pointiness: 0.20,
         scale: params.rockScale
       });
+      // Optional surface jaggedness — two-octave 3-D noise displaces the
+      // octahedral silhouette, breaking the clean diamond edges into
+      // fractured rocky detail when the slider is above 0.
+      if (params.rockJaggedness > 0) {
+        const n3 = makeNoise3D(state.seed + ':lighthouseRock');
+        rock = displace(rock, function (x, y, z) {
+          return 0.65 * n3(x * 9, y * 9, z * 9) +
+                 0.35 * n3(x * 22, y * 22, z * 22);
+        }, params.rockJaggedness);
+      }
       // Lighthouse cylinder + lamp room + dome on top of the rock.
       const body = makeCylinderY(baseX, -0.10, 0.46, 0, 0.10);
       const lamp = makeCylinderY(baseX,  0.46, 0.62, 0, 0.14);
@@ -1011,8 +1053,6 @@ const SCENES = {
       return {
         sdf: sdfUnion([rock, body, lamp, roof], 0.035),
         camera: { tiltDeg: 6 },
-        // Beam: a horizontal wedge in screen space pointing left from
-        // the lamp's world centre, with a tight 7° half-angle.
         beamMask: {
           apex: [baseX, 0.53, 0],
           dirSx: -1.0,
