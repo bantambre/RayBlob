@@ -978,13 +978,37 @@ const SCENES = {
     return sdfSubtract(base, [tunnel]);
   },
   lighthouse: function (rng, state) {
-    const body      = makeCylinderY(0, -0.70,  0.60, 0, 0.16);
-    const lamp      = makeCylinderY(0,  0.60,  0.78, 0, 0.22);
-    const roof      = makeSphere(0, 0.86, 0, 0.18);
+    // Lighthouse perched on a tall monument-style rock, off-centre to the
+    // right. The light beam emanates from the lamp room across the page
+    // toward the opposite (upper-left) sky and is rendered as NEGATIVE
+    // SPACE: the buffer marks beam pixels as non-sky, so whatever sky
+    // texture the user picks naturally vanishes inside the cone.
+    const baseX = 0.42;
+    // Monument rock — a tall narrow blob with strong verticality.
+    const rock = makeBlobSDFAt(rng, {
+      center: [baseX, -0.50, 0],
+      nSpheres: 4,
+      smoothK: 0.16,
+      spread: 0.30,
+      verticality: 1.6,
+      pointiness: 0.25,
+      scale: 0.50
+    });
+    // Lighthouse cylinder + lamp room + dome on top of the rock.
+    const body = makeCylinderY(baseX, -0.10, 0.46, 0, 0.10);
+    const lamp = makeCylinderY(baseX,  0.46, 0.62, 0, 0.14);
+    const roof = makeSphere   (baseX,  0.70, 0, 0.12);
     return {
-      sdf: sdfUnion([body, lamp, roof], 0.04),
-      extraStrokes: function (ctx) {
-        return lighthouseBeam(ctx, [0, 0.69, 0]);
+      sdf: sdfUnion([rock, body, lamp, roof], 0.035),
+      camera: { tiltDeg: 6 },
+      // Beam spec consumed by applyBeamMask: a wedge in screen space with
+      // apex at the lamp's world centre, opening toward (targetSx,
+      // targetSy) with the given half-angle.
+      beamMask: {
+        apex: [baseX, 0.53, 0],
+        targetSx: -0.70,
+        targetSy:  0.55,
+        halfAngleDeg: 13
       }
     };
   },
@@ -2934,6 +2958,43 @@ function generateVerticalHatches(state, buf) {
 }
 
 // ============================================================
+// Beam-mask post-process: scenes can return { beamMask: { apex, targetSx,
+// targetSy, halfAngleDeg } } to carve a wedge of negative space out of
+// the sky. The apex is a world position (projected to screen here);
+// targetSx/Sy give the direction of the beam in screen space, and any
+// sky pixel inside [centreAngle ± halfAngle] of the wedge is reclassified
+// from surface=0 to surface=4 ("beam"). Existing sky generators all gate
+// on surface===0 so they automatically skip the beam region.
+// ============================================================
+function applyBeamMask(buf, spec) {
+  if (!spec || !spec.apex) return;
+  const apexScreen = worldToScreen(spec.apex);
+  if (!apexScreen) return;
+  const aSx = apexScreen[0], aSy = apexScreen[1];
+  let bdx = (spec.targetSx != null ? spec.targetSx : -aSx) - aSx;
+  let bdy = (spec.targetSy != null ? spec.targetSy : aSy + 1.0) - aSy;
+  const bMag = Math.hypot(bdx, bdy);
+  if (bMag < 1e-6) return;
+  bdx /= bMag; bdy /= bMag;
+  const cosHalf = Math.cos((spec.halfAngleDeg || 12) * Math.PI / 180);
+  const W = buf.W, H = buf.H;
+  for (let py = 0; py < H; py++) {
+    const sy = SY_MAX - (py / (H - 1)) * (SY_MAX - SY_MIN);
+    for (let px = 0; px < W; px++) {
+      const idx = py * W + px;
+      if (buf.surface[idx] !== 0) continue;
+      const sx = SX_MIN + (px / (W - 1)) * (SX_MAX - SX_MIN);
+      const vx = sx - aSx;
+      const vy = sy - aSy;
+      const vMag = Math.hypot(vx, vy);
+      if (vMag < 1e-6) continue;
+      const dot = (vx * bdx + vy * bdy) / vMag;
+      if (dot > cosHalf) buf.surface[idx] = 4;
+    }
+  }
+}
+
+// ============================================================
 // Tone mapping on buf.light. Applied after raymarching, before the hatcher
 // reads brightness for stroke-density decisions.
 //
@@ -4417,13 +4478,14 @@ async function doRender() {
       const params = readSceneParams(state.scene);
       sceneResult = sceneEntry.build(rng, state, params);
     }
-    let sdf, sceneCamera = null, sceneMaterialFn = null;
+    let sdf, sceneCamera = null, sceneMaterialFn = null, sceneBeamMask = null;
     if (typeof sceneResult === 'function') {
       sdf = sceneResult;
     } else {
       sdf = sceneResult.sdf;
       sceneCamera = sceneResult.camera || null;
       sceneMaterialFn = sceneResult.materialFn || null;
+      sceneBeamMask = sceneResult.beamMask || null;
     }
     setupCamera(sceneCamera || { tiltDeg: state.camTilt });
 
@@ -4431,6 +4493,7 @@ async function doRender() {
     await tick();
     const t0 = performance.now();
     const buf = renderSceneBuffer(state, sdf, sceneMaterialFn);
+    if (sceneBeamMask) applyBeamMask(buf, sceneBeamMask);
     applyToneMap(buf, state);
     const t1 = performance.now();
 
