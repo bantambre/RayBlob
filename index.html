@@ -367,6 +367,15 @@ function makeBlobSDFAt(rng, opts) {
 // primitive is an octahedron instead of an ellipsoidal sphere. With
 // smoothK ≈ 0 the union preserves the diamond-face silhouettes, so the
 // result reads as a faceted/edgy rock instead of a soft blob.
+//
+// Extras to break the "all-pyramids" silhouette pattern:
+//   - randomRotate (default true): each shard is rotated by a random
+//     angle around Y plus small tilts around X and Z, so vertices land
+//     in different directions instead of aligning into a regular pyramid
+//     grid.
+//   - roundMix (0..1, default 0): fraction of shards (excluding the
+//     central one) rendered as spheres instead of octahedra, giving a
+//     mix of faceted + weathered rock surfaces.
 function makeOctahedralBlobAt(rng, opts) {
   const center  = opts.center || [0, 0, 0];
   const n       = opts.nSpheres || 4;
@@ -375,7 +384,11 @@ function makeOctahedralBlobAt(rng, opts) {
   const V       = opts.verticality == null ? 1 : opts.verticality;
   const P       = opts.pointiness || 0;
   const sc      = opts.scale == null ? 1 : opts.scale;
+  const randomRotate = opts.randomRotate !== false;
+  const roundMix     = opts.roundMix == null ? 0 : opts.roundMix;
   const shards = [];
+  // Central shard: always an octahedron, axis-aligned so the form has
+  // a stable centre of mass even with random rotation on the others.
   shards.push(makeOctahedron(
     center[0], center[1], center[2],
     (0.40 + rng() * 0.15) * sc
@@ -387,7 +400,26 @@ function makeOctahedralBlobAt(rng, opts) {
     const cy = center[1] + cyRaw;
     const cz = center[2] + (rng() - 0.5) * 0.5 * spread * taper * sc;
     const sz = (0.22 + rng() * 0.25) * Math.max(0.3, taper) * sc;
-    shards.push(makeOctahedron(cx, cy, cz, sz));
+    // Decide primitive: sphere with probability roundMix, otherwise oct.
+    const useSphere = (rng() < roundMix);
+    if (useSphere) {
+      // Spheres need no rotation (rotational symmetry).
+      shards.push(makeSphere(cx, cy, cz, sz));
+    } else if (randomRotate) {
+      // Random Y rotation (full 0..2π) + small X / Z tilts (±0.35 rad ≈
+      // ±20°) so the octahedron's vertices land in unique directions.
+      const ay = rng() * Math.PI * 2;
+      const ax = (rng() - 0.5) * 0.70;
+      const az = (rng() - 0.5) * 0.70;
+      let o = makeOctahedron(0, 0, 0, sz);
+      o = rotateY(o, ay);
+      if (ax !== 0) o = rotateX(o, ax);
+      if (az !== 0) o = rotateZ(o, az);
+      o = translate(o, cx, cy, cz);
+      shards.push(o);
+    } else {
+      shards.push(makeOctahedron(cx, cy, cz, sz));
+    }
   }
   return sdfUnion(shards, smoothK);
 }
@@ -1040,7 +1072,8 @@ const SCENES = {
       { id: 'rockSmoothK',     label: 'Rock smooth K',  type: 'number', min: 0.00, max: 0.20, step: 0.01, default: 0.03 },
       { id: 'rockTaper',       label: 'Stack taper',    type: 'number', min: 0.10, max: 0.70, step: 0.05, default: 0.40 },
       { id: 'rockOverlap',     label: 'Rock overlap',   type: 'number', min: -0.05, max: 0.35, step: 0.02, default: 0.12 },
-      { id: 'rockJaggedness',  label: 'Rock jaggedness',type: 'number', min: 0.00, max: 0.12, step: 0.005, default: 0.04 },
+      { id: 'rockJaggedness',  label: 'Rock jaggedness',type: 'number', min: 0.00, max: 0.30, step: 0.005, default: 0.08 },
+      { id: 'rockRoundMix',    label: 'Round mix',      type: 'number', min: 0.00, max: 1.00, step: 0.05, default: 0.40 },
       { id: 'foundationWidth', label: 'Foundation',     type: 'number', min: 0.00, max: 3.50, step: 0.10, default: 1.80 },
       { id: 'clusterRocks',    label: 'Cluster rocks',  type: 'int',    min: 0,    max: 5,    step: 1,    default: 2    }
     ],
@@ -1106,7 +1139,9 @@ const SCENES = {
           spread: spreads[s],
           verticality: params.rockVerticality,
           pointiness: 0.20,
-          scale: scales[s]
+          scale: scales[s],
+          roundMix: params.rockRoundMix,
+          randomRotate: true
         }));
       }
       // Foundation — a wide, flat octahedral blob at the base of the
@@ -1124,7 +1159,9 @@ const SCENES = {
           spread: 1.40,
           verticality: 0.30,
           pointiness: 0,
-          scale: fScale
+          scale: fScale,
+          roundMix: params.rockRoundMix,
+          randomRotate: true
         }));
       }
       // Cluster rocks — N additional smaller rocks scattered laterally
@@ -1145,7 +1182,9 @@ const SCENES = {
           spread: 0.60,
           verticality: 0.85,
           pointiness: 0,
-          scale: cScale
+          scale: cScale,
+          roundMix: params.rockRoundMix,
+          randomRotate: true
         }));
       }
       let rock = sdfUnion(stackParts, 0.025);
@@ -1154,9 +1193,14 @@ const SCENES = {
       // fractured rocky detail when the slider is above 0.
       if (params.rockJaggedness > 0) {
         const n3 = makeNoise3D(state.seed + ':lighthouseRock');
+        // Three octaves: big folds + medium bumps + fine grain. The
+        // amplitudes roughly halve each octave so the silhouette is
+        // dominated by the largest folds while the high-freq layer
+        // adds rocky texture without dominating the form.
         rock = displace(rock, function (x, y, z) {
-          return 0.65 * n3(x * 9, y * 9, z * 9) +
-                 0.35 * n3(x * 22, y * 22, z * 22);
+          return 0.50 * n3(x *  6, y *  6, z *  6) +
+                 0.30 * n3(x * 16, y * 16, z * 16) +
+                 0.20 * n3(x * 38, y * 38, z * 38);
         }, params.rockJaggedness);
       }
       // Lighthouse cylinder + lamp room + dome on top of the rock.
