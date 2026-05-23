@@ -46,6 +46,7 @@
     <div class="field"><label>Scene</label>
       <select id="scene">
         <option value="single" selected>Single blob</option>
+        <option value="builder">Scene builder</option>
         <option value="monoliths">Monoliths</option>
         <option value="arch">Cave arch</option>
         <option value="lighthouse">Lighthouse</option>
@@ -1935,6 +1936,198 @@ const SCENES = {
 };
 
 // ============================================================
+// Scene builder (#97 Phase 1)
+//
+// A special scene whose UI is a layer list — each layer is one primitive
+// chosen from BUILDER_PRIMITIVES with its own parameter inputs. The
+// builder maintains its state across renders in module-scope `builderState`
+// and exposes a custom UI renderer that the per-scene UI plumbing calls
+// when `ui === 'custom'`.
+//
+// Phase 1 covers: add/remove primitives, edit their parameters, choose
+// a smoothK for the union. Domain operators, camera control, URL
+// serialisation, and "copy as JS" are future phases.
+// ============================================================
+const BUILDER_PRIMITIVES = {
+  sphere: {
+    label: 'Sphere',
+    params: [
+      { id: 'cx', label: 'cx', min: -1.0, max: 1.0,  step: 0.02, default:  0    },
+      { id: 'cy', label: 'cy', min: -1.0, max: 1.0,  step: 0.02, default:  0    },
+      { id: 'cz', label: 'cz', min: -1.0, max: 1.0,  step: 0.02, default:  0    },
+      { id: 'r',  label: 'r',  min:  0.01, max: 0.6, step: 0.01, default:  0.30 }
+    ],
+    build: function (p) { return makeSphere(p.cx, p.cy, p.cz, p.r); }
+  },
+  box: {
+    label: 'Box',
+    params: [
+      { id: 'cx',    label: 'cx',    min: -1.0,  max: 1.0,  step: 0.02,  default:  0    },
+      { id: 'cy',    label: 'cy',    min: -1.0,  max: 1.0,  step: 0.02,  default:  0    },
+      { id: 'cz',    label: 'cz',    min: -1.0,  max: 1.0,  step: 0.02,  default:  0    },
+      { id: 'hx',    label: 'hx',    min:  0.01, max: 0.6,  step: 0.01,  default:  0.20 },
+      { id: 'hy',    label: 'hy',    min:  0.01, max: 0.6,  step: 0.01,  default:  0.20 },
+      { id: 'hz',    label: 'hz',    min:  0.01, max: 0.6,  step: 0.01,  default:  0.20 },
+      { id: 'round', label: 'round', min:  0,    max: 0.1,  step: 0.005, default:  0.01 }
+    ],
+    build: function (p) { return makeBox(p.cx, p.cy, p.cz, p.hx, p.hy, p.hz, p.round); }
+  },
+  cylinderY: {
+    label: 'Cylinder (Y)',
+    params: [
+      { id: 'cx',  label: 'cx',  min: -1.0,  max: 1.0,  step: 0.02, default:  0    },
+      { id: 'cy0', label: 'cy0', min: -1.0,  max: 1.0,  step: 0.02, default: -0.30 },
+      { id: 'cy1', label: 'cy1', min: -1.0,  max: 1.0,  step: 0.02, default:  0.30 },
+      { id: 'cz',  label: 'cz',  min: -1.0,  max: 1.0,  step: 0.02, default:  0    },
+      { id: 'r',   label: 'r',   min:  0.01, max: 0.5,  step: 0.01, default:  0.10 }
+    ],
+    build: function (p) { return makeCylinderY(p.cx, p.cy0, p.cy1, p.cz, p.r); }
+  },
+  coneY: {
+    label: 'Cone (Y)',
+    params: [
+      { id: 'cx',       label: 'cx',     min: -1.0,  max: 1.0,  step: 0.02, default:  0    },
+      { id: 'cy_apex',  label: 'apex y', min: -1.0,  max: 1.0,  step: 0.02, default:  0.45 },
+      { id: 'cy_base',  label: 'base y', min: -1.0,  max: 1.0,  step: 0.02, default: -0.35 },
+      { id: 'cz',       label: 'cz',     min: -1.0,  max: 1.0,  step: 0.02, default:  0    },
+      { id: 'r_base',   label: 'r base', min:  0.01, max: 0.6,  step: 0.01, default:  0.30 }
+    ],
+    build: function (p) { return makeConeY(p.cx, p.cy_apex, p.cy_base, p.cz, p.r_base); }
+  },
+  capsuleX: {
+    label: 'Capsule (X)',
+    params: [
+      { id: 'cx',      label: 'cx',     min: -1.0,  max: 1.0,  step: 0.02, default: 0    },
+      { id: 'cy',      label: 'cy',     min: -1.0,  max: 1.0,  step: 0.02, default: 0    },
+      { id: 'cz',      label: 'cz',     min: -1.0,  max: 1.0,  step: 0.02, default: 0    },
+      { id: 'halfLen', label: 'halfLen',min:  0.01, max: 0.6,  step: 0.01, default: 0.20 },
+      { id: 'r',       label: 'r',      min:  0.01, max: 0.3,  step: 0.01, default: 0.06 }
+    ],
+    build: function (p) { return makeCapsuleX(p.cx, p.cy, p.cz, p.halfLen, p.r); }
+  },
+  octahedron: {
+    label: 'Octahedron',
+    params: [
+      { id: 'cx', label: 'cx', min: -1.0,  max: 1.0, step: 0.02, default: 0    },
+      { id: 'cy', label: 'cy', min: -1.0,  max: 1.0, step: 0.02, default: 0    },
+      { id: 'cz', label: 'cz', min: -1.0,  max: 1.0, step: 0.02, default: 0    },
+      { id: 's',  label: 's',  min:  0.05, max: 0.7, step: 0.01, default: 0.30 }
+    ],
+    build: function (p) { return makeOctahedron(p.cx, p.cy, p.cz, p.s); }
+  }
+};
+
+const builderState = {
+  layers: [
+    { id: 'L1', type: 'sphere', params: { cx: 0, cy: 0,    cz: 0, r: 0.25 } },
+    { id: 'L2', type: 'box',    params: { cx: 0, cy: -0.45, cz: 0, hx: 0.40, hy: 0.06, hz: 0.30, round: 0.01 } }
+  ],
+  nextId: 3,
+  smoothK: 0.05
+};
+
+SCENES.builder = {
+  ui: 'custom',
+  build: function (rng, state) {
+    const sdfs = [];
+    for (const layer of builderState.layers) {
+      const def = BUILDER_PRIMITIVES[layer.type];
+      if (!def) continue;
+      const p = {};
+      for (const desc of def.params) {
+        p[desc.id] = (layer.params[desc.id] != null) ? layer.params[desc.id] : desc.default;
+      }
+      sdfs.push(def.build(p));
+    }
+    // sdfUnion needs at least one input. If the user has emptied the
+    // layer list, render a tiny invisible safety sphere far below the
+    // horizon so the rest of the pipeline doesn't choke on an empty union.
+    if (sdfs.length === 0) return makeSphere(0, -10, 0, 0.001);
+    return sdfUnion(sdfs, Math.max(0, builderState.smoothK || 0));
+  },
+  renderCustomUi: function (panel) {
+    let html = '';
+    html += '<div class="field"><label>Smooth K</label>' +
+            '<input id="builder_smoothK" type="number" min="0" max="0.5" step="0.02" value="' +
+            builderState.smoothK + '"></div>';
+    for (let i = 0; i < builderState.layers.length; i++) {
+      const layer = builderState.layers[i];
+      const def = BUILDER_PRIMITIVES[layer.type];
+      if (!def) continue;
+      html += '<div style="margin:6px 0;padding:6px;border:1px solid #2a2a2a;border-radius:4px">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:11px;color:#9bf">' +
+              '<span>Layer ' + (i + 1) + ' · ' + def.label + '</span>' +
+              '<button data-removelayer="' + layer.id + '" style="background:#522;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:10px;padding:1px 5px">×</button>' +
+              '</div>';
+      for (const p of def.params) {
+        const val = (layer.params[p.id] != null) ? layer.params[p.id] : p.default;
+        html += '<div class="field"><label>' + p.label + '</label>' +
+                '<input data-layerid="' + layer.id + '" data-paramid="' + p.id +
+                '" type="number" min="' + p.min + '" max="' + p.max +
+                '" step="' + p.step + '" value="' + val + '"></div>';
+      }
+      html += '</div>';
+    }
+    // Add-primitive footer
+    let addOpts = '';
+    for (const k of Object.keys(BUILDER_PRIMITIVES)) {
+      addOpts += '<option value="' + k + '">' + BUILDER_PRIMITIVES[k].label + '</option>';
+    }
+    html += '<div style="margin-top:8px;display:flex;gap:6px;align-items:center">' +
+            '<select id="builder_addType" style="flex:1;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit;padding:3px">' +
+            addOpts +
+            '</select>' +
+            '<button id="builder_add" style="background:#225;color:#fff;border:none;border-radius:3px;cursor:pointer;padding:3px 10px">+ Add</button>' +
+            '</div>';
+    panel.innerHTML = html;
+
+    // Wire param inputs: mutate builderState.layers in place; re-render
+    // is triggered explicitly by the global Render button.
+    panel.querySelectorAll('input[data-layerid]').forEach(el => {
+      el.addEventListener('change', () => {
+        const lid = el.getAttribute('data-layerid');
+        const pid = el.getAttribute('data-paramid');
+        const layer = builderState.layers.find(l => l.id === lid);
+        if (!layer) return;
+        layer.params[pid] = parseFloat(el.value);
+      });
+      el.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
+    });
+
+    // Wire remove buttons.
+    panel.querySelectorAll('button[data-removelayer]').forEach(el => {
+      el.addEventListener('click', () => {
+        const lid = el.getAttribute('data-removelayer');
+        builderState.layers = builderState.layers.filter(l => l.id !== lid);
+        SCENES.builder.renderCustomUi(panel);
+      });
+    });
+
+    // Wire add button.
+    document.getElementById('builder_add').addEventListener('click', () => {
+      const t = document.getElementById('builder_addType').value;
+      const def = BUILDER_PRIMITIVES[t];
+      if (!def) return;
+      const params = {};
+      for (const p of def.params) params[p.id] = p.default;
+      builderState.layers.push({
+        id: 'L' + (builderState.nextId++),
+        type: t,
+        params: params
+      });
+      SCENES.builder.renderCustomUi(panel);
+    });
+
+    // Wire smoothK input.
+    const sk = document.getElementById('builder_smoothK');
+    sk.addEventListener('change', () => {
+      builderState.smoothK = parseFloat(sk.value);
+    });
+    sk.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
+  }
+};
+
+// ============================================================
 // Camera + raymarch (orthographic in y, mild perspective in z so the
 // horizon plane is visible)
 // ============================================================
@@ -3586,6 +3779,12 @@ function renderSceneUi(sceneName) {
     return;
   }
   header.style.display = '';
+  // Scenes whose UI is too dynamic for the schema array (the builder)
+  // render themselves into the panel.
+  if (scene.ui === 'custom' && typeof scene.renderCustomUi === 'function') {
+    scene.renderCustomUi(panel);
+    return;
+  }
   let html = '';
   for (const c of scene.ui) {
     const step = c.step != null ? c.step : (c.type === 'int' ? 1 : 0.1);
@@ -3672,6 +3871,10 @@ async function doRender() {
     let sceneResult;
     if (typeof sceneEntry === 'function') {
       sceneResult = sceneEntry(rng, state);
+    } else if (sceneEntry.ui === 'custom') {
+      // Custom-UI scenes (the builder) hold their own state and ignore
+      // the readSceneParams path.
+      sceneResult = sceneEntry.build(rng, state);
     } else {
       const params = readSceneParams(state.scene);
       sceneResult = sceneEntry.build(rng, state, params);
