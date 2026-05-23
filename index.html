@@ -1010,6 +1010,15 @@ const SCENES = {
   },
   lighthouse: {
     ui: [
+      { id: 'beamStyle',       label: 'Beam style',     type: 'enum',
+        options: [
+          { value: 'negative', label: 'negative' },
+          { value: 'rays',     label: 'rays'     },
+          { value: 'both',     label: 'both'     },
+          { value: 'none',     label: 'off'      }
+        ], default: 'rays' },
+      { id: 'beamRays',        label: 'Ray count',      type: 'int',    min: 5,    max: 30,   step: 1,    default: 17   },
+      { id: 'beamSpreadDeg',   label: 'Ray spread (°)', type: 'number', min: 4,    max: 60,   step: 1,    default: 22   },
       { id: 'rockStacks',      label: 'Rock stacks',    type: 'int',    min: 1,    max: 3,    step: 1,    default: 2    },
       { id: 'rockShards',      label: 'Rock shards',    type: 'int',    min: 4,    max: 8,    step: 1,    default: 6    },
       { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.20, max: 1.50, step: 0.05, default: 0.55 },
@@ -1034,23 +1043,44 @@ const SCENES = {
       const baseX = 0.42;
       const stacks = params.rockStacks;
       const stackParts = [];
-      let stackY = -0.45;
+      // Build the stack list bottom-to-top so the bottom rock (s=0)
+      // is the WIDEST and the top rock (s=stacks-1) is the SMALLEST.
+      // Then place each one downward from y = lighthouseBase so the
+      // entire stack sits BELOW the lighthouse rather than poking up
+      // through it.
+      const TOP_Y = -0.10; // top of rock stack ≈ lighthouse base
+      const OVERLAP = 0.30;
+      const scales = [];
+      const halfHeights = [];
       for (let s = 0; s < stacks; s++) {
         const t = stacks <= 1 ? 0 : s / (stacks - 1);
-        const stackScale  = params.rockScale  * (1 - t * params.rockTaper);
+        // t=0 → bottom (full scale); t=1 → top (tapered smallest)
+        const sc = params.rockScale * (1 - t * params.rockTaper);
+        scales.push(sc);
+        halfHeights.push(sc * params.rockVerticality * 0.475);
+      }
+      // Topmost stack: its TOP is at TOP_Y → its centre is TOP_Y minus
+      // its own half-height.
+      const positions = new Array(stacks);
+      positions[stacks - 1] = TOP_Y - halfHeights[stacks - 1];
+      for (let s = stacks - 2; s >= 0; s--) {
+        positions[s] = positions[s + 1] -
+                       (1 - OVERLAP) * (halfHeights[s] + halfHeights[s + 1]);
+      }
+      for (let s = 0; s < stacks; s++) {
+        const t = stacks <= 1 ? 0 : s / (stacks - 1);
         const stackSpread = params.rockSpread * (1 - t * params.rockTaper * 0.6);
-        const stackShards = Math.max(3, params.rockShards - s);
+        // Bottom stack gets the full shard count; top stack gets fewer.
+        const stackShards = Math.max(3, params.rockShards - (stacks - 1 - s));
         stackParts.push(makeOctahedralBlobAt(rng, {
-          center: [baseX, stackY, 0],
+          center: [baseX, positions[s], 0],
           nSpheres: stackShards,
           smoothK: params.rockSmoothK,
           spread: stackSpread,
           verticality: params.rockVerticality,
           pointiness: 0.20,
-          scale: stackScale
+          scale: scales[s]
         }));
-        // Step y up by roughly the vertical extent of this stack.
-        stackY += stackScale * params.rockVerticality * 0.85;
       }
       let rock = sdfUnion(stackParts, 0.025);
       // Optional surface jaggedness — two-octave 3-D noise displaces the
@@ -1067,19 +1097,38 @@ const SCENES = {
       const body = makeCylinderY(baseX, -0.10, 0.46, 0, 0.10);
       const lamp = makeCylinderY(baseX,  0.46, 0.62, 0, 0.14);
       const roof = makeSphere   (baseX,  0.70, 0, 0.12);
-      return {
+      const result = {
         sdf: sdfUnion([rock, body, lamp, roof], 0.035),
-        camera: { tiltDeg: 6 },
-        beamMask: {
-          // Apex at the centre of the dome (the topmost sphere at y=0.70),
-          // not the lamp room — the beam reads as emanating from the lit
-          // glass of the lighthouse cap.
-          apex: [baseX, 0.70, 0],
+        camera: { tiltDeg: 6 }
+      };
+      // Beam dispatch: 'negative' carves a sky wedge, 'rays' draws a fan
+      // of line strokes from the dome via the lighthouseBeam helper,
+      // 'both' does both, 'off' does neither.
+      const useNeg  = (params.beamStyle === 'negative' || params.beamStyle === 'both');
+      const useRays = (params.beamStyle === 'rays'     || params.beamStyle === 'both');
+      if (useNeg) {
+        result.beamMask = {
+          apex: [baseX, 0.70, 0],   // dome centre
           dirSx: -1.0,
           dirSy:  0.0,
           halfAngleDeg: 7
-        }
-      };
+        };
+      }
+      if (useRays) {
+        const numRays = params.beamRays || 17;
+        const spreadDeg = params.beamSpreadDeg || 22;
+        result.extraStrokes = function (ctx) {
+          // centerDeg = -90 → rays radiate to the LEFT (lighthouseBeam's
+          // 0 = up, positive = right, negative = left).
+          return lighthouseBeam(ctx, [baseX, 0.70, 0], {
+            numRays: numRays,
+            centerDeg: -90,
+            spreadDeg: spreadDeg,
+            lengthVB: 1400
+          });
+        };
+      }
+      return result;
     }
   },
   cairn: {
@@ -4505,16 +4554,30 @@ function renderSceneUi(sceneName) {
   }
   let html = '';
   for (const c of scene.ui) {
-    const step = c.step != null ? c.step : (c.type === 'int' ? 1 : 0.1);
-    html += '<div class="field"><label>' + c.label + '</label>' +
-            '<input id="' + c.id + '" type="number"' +
-            ' min="' + c.min + '" max="' + c.max +
-            '" step="' + step + '" value="' + c.default + '"></div>';
+    if (c.type === 'enum') {
+      let opts = '';
+      for (const o of c.options) {
+        const val = (typeof o === 'object') ? o.value : o;
+        const lab = (typeof o === 'object') ? o.label : o;
+        opts += '<option value="' + val + '"' +
+                (val === c.default ? ' selected' : '') + '>' + lab + '</option>';
+      }
+      html += '<div class="field"><label>' + c.label + '</label>' +
+              '<select id="' + c.id + '"' +
+              ' style="width:78px;padding:3px 5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:3px;font:inherit">' +
+              opts + '</select></div>';
+    } else {
+      const step = c.step != null ? c.step : (c.type === 'int' ? 1 : 0.1);
+      html += '<div class="field"><label>' + c.label + '</label>' +
+              '<input id="' + c.id + '" type="number"' +
+              ' min="' + c.min + '" max="' + c.max +
+              '" step="' + step + '" value="' + c.default + '"></div>';
+    }
   }
   panel.innerHTML = html;
   // Inputs created dynamically don't carry the Enter-key listener wired
   // up at startup, so attach one now.
-  panel.querySelectorAll('input').forEach(el => {
+  panel.querySelectorAll('input, select').forEach(el => {
     el.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
   });
 }
@@ -4528,7 +4591,9 @@ function readSceneParams(sceneName) {
   for (const c of scene.ui) {
     const el = document.getElementById(c.id);
     if (!el) { out[c.id] = c.default; continue; }
-    if (c.type === 'int') {
+    if (c.type === 'enum') {
+      out[c.id] = el.value;
+    } else if (c.type === 'int') {
       out[c.id] = clampInt(el.value, c.min, c.max, c.default);
     } else {
       out[c.id] = clampFloat(el.value, c.min, c.max, c.default);
