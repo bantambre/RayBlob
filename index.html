@@ -977,40 +977,50 @@ const SCENES = {
     const tunnel = makeCapsuleZ(0, 0.12, 0, 0.55, 0.22);
     return sdfSubtract(base, [tunnel]);
   },
-  lighthouse: function (rng, state) {
-    // Lighthouse perched on a tall monument-style rock, off-centre to the
-    // right. The light beam emanates from the lamp room across the page
-    // toward the opposite (upper-left) sky and is rendered as NEGATIVE
-    // SPACE: the buffer marks beam pixels as non-sky, so whatever sky
-    // texture the user picks naturally vanishes inside the cone.
-    const baseX = 0.42;
-    // Monument rock — a tall narrow blob with strong verticality.
-    const rock = makeBlobSDFAt(rng, {
-      center: [baseX, -0.50, 0],
-      nSpheres: 4,
-      smoothK: 0.16,
-      spread: 0.30,
-      verticality: 1.6,
-      pointiness: 0.25,
-      scale: 0.50
-    });
-    // Lighthouse cylinder + lamp room + dome on top of the rock.
-    const body = makeCylinderY(baseX, -0.10, 0.46, 0, 0.10);
-    const lamp = makeCylinderY(baseX,  0.46, 0.62, 0, 0.14);
-    const roof = makeSphere   (baseX,  0.70, 0, 0.12);
-    return {
-      sdf: sdfUnion([rock, body, lamp, roof], 0.035),
-      camera: { tiltDeg: 6 },
-      // Beam spec consumed by applyBeamMask: a wedge in screen space with
-      // apex at the lamp's world centre, opening toward (targetSx,
-      // targetSy) with the given half-angle.
-      beamMask: {
-        apex: [baseX, 0.53, 0],
-        targetSx: -0.70,
-        targetSy:  0.55,
-        halfAngleDeg: 13
-      }
-    };
+  lighthouse: {
+    ui: [
+      { id: 'rockSpheres',     label: 'Rock spheres', type: 'int',    min: 4,    max: 8,   step: 1,    default: 6   },
+      { id: 'rockScale',       label: 'Rock scale',   type: 'number', min: 0.20, max: 0.60, step: 0.02, default: 0.40 },
+      { id: 'rockVerticality', label: 'Rock vert.',   type: 'number', min: 0.6,  max: 2.2, step: 0.1,  default: 1.4 },
+      { id: 'rockSpread',      label: 'Rock spread',  type: 'number', min: 0.20, max: 0.80, step: 0.05, default: 0.40 },
+      { id: 'rockSmoothK',     label: 'Rock smooth K',type: 'number', min: 0.05, max: 0.40, step: 0.02, default: 0.14 }
+    ],
+    build: function (rng, state, params) {
+      // Lighthouse perched on a tall monument-style rock, off-centre to
+      // the right. The light beam emanates horizontally from the lamp
+      // room and is rendered as NEGATIVE SPACE: the buffer marks beam
+      // pixels as non-sky, so whatever sky texture the user picks
+      // naturally vanishes inside the cone.
+      const baseX = 0.42;
+      // Monument rock — composed of `nSpheres` smaller spheres (smaller
+      // than the monolith preset) so the user can dial in the rock's
+      // mass via the panel.
+      const rock = makeBlobSDFAt(rng, {
+        center: [baseX, -0.40, 0],
+        nSpheres: params.rockSpheres,
+        smoothK: params.rockSmoothK,
+        spread: params.rockSpread,
+        verticality: params.rockVerticality,
+        pointiness: 0.20,
+        scale: params.rockScale
+      });
+      // Lighthouse cylinder + lamp room + dome on top of the rock.
+      const body = makeCylinderY(baseX, -0.10, 0.46, 0, 0.10);
+      const lamp = makeCylinderY(baseX,  0.46, 0.62, 0, 0.14);
+      const roof = makeSphere   (baseX,  0.70, 0, 0.12);
+      return {
+        sdf: sdfUnion([rock, body, lamp, roof], 0.035),
+        camera: { tiltDeg: 6 },
+        // Beam: a horizontal wedge in screen space pointing left from
+        // the lamp's world centre, with a tight 7° half-angle.
+        beamMask: {
+          apex: [baseX, 0.53, 0],
+          dirSx: -1.0,
+          dirSy:  0.0,
+          halfAngleDeg: 7
+        }
+      };
+    }
   },
   cone: function (rng, state) {
     // Circular cone — apex up, base on the ground plane.
@@ -2971,8 +2981,17 @@ function applyBeamMask(buf, spec) {
   const apexScreen = worldToScreen(spec.apex);
   if (!apexScreen) return;
   const aSx = apexScreen[0], aSy = apexScreen[1];
-  let bdx = (spec.targetSx != null ? spec.targetSx : -aSx) - aSx;
-  let bdy = (spec.targetSy != null ? spec.targetSy : aSy + 1.0) - aSy;
+  // Accept either an explicit direction vector (dirSx/dirSy — easier to
+  // reason about for "horizontal beam") or an absolute screen target
+  // (targetSx/targetSy) as a back-compat fallback.
+  let bdx, bdy;
+  if (spec.dirSx != null || spec.dirSy != null) {
+    bdx = spec.dirSx || 0;
+    bdy = spec.dirSy || 0;
+  } else {
+    bdx = (spec.targetSx != null ? spec.targetSx : -aSx) - aSx;
+    bdy = (spec.targetSy != null ? spec.targetSy : aSy + 1.0) - aSy;
+  }
   const bMag = Math.hypot(bdx, bdy);
   if (bMag < 1e-6) return;
   bdx /= bMag; bdy /= bMag;
