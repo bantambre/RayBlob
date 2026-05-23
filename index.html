@@ -1017,8 +1017,8 @@ const SCENES = {
           { value: 'both',     label: 'both'     },
           { value: 'none',     label: 'off'      }
         ], default: 'rays' },
-      { id: 'beamRays',        label: 'Ray count',      type: 'int',    min: 5,    max: 30,   step: 1,    default: 17   },
-      { id: 'beamSpreadDeg',   label: 'Ray spread (°)', type: 'number', min: 4,    max: 60,   step: 1,    default: 22   },
+      { id: 'beamRays',        label: 'Ray count',      type: 'int',    min: 5,    max: 60,   step: 1,    default: 34   },
+      { id: 'beamSpreadDeg',   label: 'Ray spread (°)', type: 'number', min: 4,    max: 60,   step: 1,    default: 7    },
       { id: 'rockStacks',      label: 'Rock stacks',    type: 'int',    min: 1,    max: 3,    step: 1,    default: 2    },
       { id: 'rockShards',      label: 'Rock shards',    type: 'int',    min: 4,    max: 8,    step: 1,    default: 6    },
       { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.20, max: 1.50, step: 0.05, default: 0.55 },
@@ -1051,13 +1051,20 @@ const SCENES = {
       const TOP_Y = -0.10; // top of rock stack ≈ lighthouse base
       const OVERLAP = 0.30;
       const scales = [];
+      const spreads = [];
       const halfHeights = [];
       for (let s = 0; s < stacks; s++) {
         const t = stacks <= 1 ? 0 : s / (stacks - 1);
         // t=0 → bottom (full scale); t=1 → top (tapered smallest)
-        const sc = params.rockScale * (1 - t * params.rockTaper);
+        const sc = params.rockScale  * (1 - t * params.rockTaper);
+        const sp = params.rockSpread * (1 - t * params.rockTaper * 0.6);
         scales.push(sc);
-        halfHeights.push(sc * params.rockVerticality * 0.475);
+        spreads.push(sp);
+        // The vertical extent of the blob has two contributors:
+        //   - the central octahedron itself: 0.47 * sc (no V scaling — L1-ball)
+        //   - additional shards scattered by 0.3 * spread * V * sc in y
+        // Worst-case upward reach ≈ sc * (0.47 + 0.3 * spread * V).
+        halfHeights.push(sc * (0.47 + 0.3 * sp * params.rockVerticality));
       }
       // Topmost stack: its TOP is at TOP_Y → its centre is TOP_Y minus
       // its own half-height.
@@ -1068,15 +1075,13 @@ const SCENES = {
                        (1 - OVERLAP) * (halfHeights[s] + halfHeights[s + 1]);
       }
       for (let s = 0; s < stacks; s++) {
-        const t = stacks <= 1 ? 0 : s / (stacks - 1);
-        const stackSpread = params.rockSpread * (1 - t * params.rockTaper * 0.6);
         // Bottom stack gets the full shard count; top stack gets fewer.
         const stackShards = Math.max(3, params.rockShards - (stacks - 1 - s));
         stackParts.push(makeOctahedralBlobAt(rng, {
           center: [baseX, positions[s], 0],
           nSpheres: stackShards,
           smoothK: params.rockSmoothK,
-          spread: stackSpread,
+          spread: spreads[s],
           verticality: params.rockVerticality,
           pointiness: 0.20,
           scale: scales[s]
