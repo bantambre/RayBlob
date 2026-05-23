@@ -851,7 +851,9 @@ function makeCapsuleZ(cx, cy, cz, halfLen, r) {
 
 // Beam helper: returns viewBox-space polylines for a fan of light rays
 // emanating from a world-space lamp position. Used by the lighthouse
-// scenes via the scene `extraStrokes` callback.
+// scenes via the scene `extraStrokes` callback. Rays are clipped to the
+// printable area (inside MARGIN_VB) so they don't bleed into the page
+// margin.
 function lighthouseBeam(ctx, lampWorldPos, opts) {
   opts = opts || {};
   const lampVB = ctx.worldToVB(lampWorldPos);
@@ -860,6 +862,11 @@ function lighthouseBeam(ctx, lampWorldPos, opts) {
   const centerDeg  = opts.centerDeg  != null ? opts.centerDeg  : 30;  // 0=up, +=right
   const spreadDeg  = opts.spreadDeg  != null ? opts.spreadDeg  : 22;
   const lengthVB   = opts.lengthVB   != null ? opts.lengthVB   : 900;
+  // Inside-margin bounds. Liang-Barsky clip clamps each ray's end to
+  // the first place it exits this rectangle, so rays don't run into
+  // the page margin.
+  const m = MARGIN_VB;
+  const xMin = m, yMin = m, xMax = VB_W - m, yMax = VB_H - m;
   const paths = [];
   for (let i = 0; i < numRays; i++) {
     const t = numRays === 1 ? 0 : (i / (numRays - 1) - 0.5) * 2;  // -1..1
@@ -867,9 +874,15 @@ function lighthouseBeam(ctx, lampWorldPos, opts) {
     // 0° = straight up in viewBox (negative y direction).
     const dx =  Math.sin(ang) * lengthVB;
     const dy = -Math.cos(ang) * lengthVB;
+    let tMax = 1;
+    if (dx > 0) tMax = Math.min(tMax, (xMax - lampVB[0]) / dx);
+    if (dx < 0) tMax = Math.min(tMax, (xMin - lampVB[0]) / dx);
+    if (dy > 0) tMax = Math.min(tMax, (yMax - lampVB[1]) / dy);
+    if (dy < 0) tMax = Math.min(tMax, (yMin - lampVB[1]) / dy);
+    if (tMax <= 0) continue;
     paths.push([
-      [lampVB[0],      lampVB[1]],
-      [lampVB[0] + dx, lampVB[1] + dy]
+      [lampVB[0],            lampVB[1]],
+      [lampVB[0] + dx * tMax, lampVB[1] + dy * tMax]
     ]);
   }
   return paths;
