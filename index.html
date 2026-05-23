@@ -2020,10 +2020,74 @@ const BUILDER_PRIMITIVES = {
   }
 };
 
+// Domain operator registry. Each layer can carry an ordered list of
+// operators applied to its primitive SDF before union. `apply(sdf, p, ctx)`
+// receives the SDF, the op's parameter values, and a context object
+// (used by `displace` to seed a noise function per layer+op).
+const BUILDER_OPS = {
+  twistY: {
+    label: 'Twist Y',
+    params: [{ id: 'k', label: 'k', min: -8, max: 8, step: 0.2, default: 2.0 }],
+    apply: function (sdf, p) { return twistY(sdf, p.k); }
+  },
+  bendY: {
+    label: 'Bend Y',
+    params: [{ id: 'k', label: 'k', min: -4, max: 4, step: 0.1, default: 1.0 }],
+    apply: function (sdf, p) { return bendY(sdf, p.k); }
+  },
+  rotateX: {
+    label: 'Rotate X',
+    params: [{ id: 'angle', label: 'rad', min: -3.14, max: 3.14, step: 0.05, default: 0 }],
+    apply: function (sdf, p) { return rotateX(sdf, p.angle); }
+  },
+  rotateY: {
+    label: 'Rotate Y',
+    params: [{ id: 'angle', label: 'rad', min: -3.14, max: 3.14, step: 0.05, default: 0 }],
+    apply: function (sdf, p) { return rotateY(sdf, p.angle); }
+  },
+  rotateZ: {
+    label: 'Rotate Z',
+    params: [{ id: 'angle', label: 'rad', min: -3.14, max: 3.14, step: 0.05, default: 0 }],
+    apply: function (sdf, p) { return rotateZ(sdf, p.angle); }
+  },
+  translate: {
+    label: 'Translate',
+    params: [
+      { id: 'dx', label: 'dx', min: -1, max: 1, step: 0.02, default: 0 },
+      { id: 'dy', label: 'dy', min: -1, max: 1, step: 0.02, default: 0 },
+      { id: 'dz', label: 'dz', min: -1, max: 1, step: 0.02, default: 0 }
+    ],
+    apply: function (sdf, p) { return translate(sdf, p.dx, p.dy, p.dz); }
+  },
+  mirror: {
+    label: 'Mirror',
+    params: [
+      { id: 'axis', label: 'axis', type: 'enum', options: ['x', 'y', 'z'], default: 'x' }
+    ],
+    apply: function (sdf, p) { return mirror(sdf, p.axis); }
+  },
+  displace: {
+    label: 'Displace',
+    params: [
+      { id: 'freq', label: 'freq', min: 1,    max: 30,  step: 0.5,  default: 6    },
+      { id: 'amp',  label: 'amp',  min: 0.01, max: 0.3, step: 0.01, default: 0.05 }
+    ],
+    apply: function (sdf, p, ctx) {
+      const seedKey = (ctx && ctx.seed) ? ctx.seed : 'default';
+      const layerId = (ctx && ctx.layerId) || 'L?';
+      const opIdx = (ctx && ctx.opIdx != null) ? ctx.opIdx : 0;
+      const n3 = makeNoise3D(seedKey + ':bld:' + layerId + ':' + opIdx);
+      return displace(sdf, function (x, y, z) {
+        return n3(x * p.freq, y * p.freq, z * p.freq);
+      }, p.amp);
+    }
+  }
+};
+
 const builderState = {
   layers: [
-    { id: 'L1', type: 'sphere', params: { cx: 0, cy: 0,    cz: 0, r: 0.25 } },
-    { id: 'L2', type: 'box',    params: { cx: 0, cy: -0.45, cz: 0, hx: 0.40, hy: 0.06, hz: 0.30, round: 0.01 } }
+    { id: 'L1', type: 'sphere', params: { cx: 0, cy: 0,    cz: 0, r: 0.25 }, ops: [] },
+    { id: 'L2', type: 'box',    params: { cx: 0, cy: -0.45, cz: 0, hx: 0.40, hy: 0.06, hz: 0.30, round: 0.01 }, ops: [] }
   ],
   nextId: 3,
   smoothK: 0.05
@@ -2040,15 +2104,49 @@ SCENES.builder = {
       for (const desc of def.params) {
         p[desc.id] = (layer.params[desc.id] != null) ? layer.params[desc.id] : desc.default;
       }
-      sdfs.push(def.build(p));
+      let sdf = def.build(p);
+      // Chain operators in order.
+      const ops = layer.ops || [];
+      for (let i = 0; i < ops.length; i++) {
+        const op = ops[i];
+        const opDef = BUILDER_OPS[op.type];
+        if (!opDef) continue;
+        const opP = {};
+        for (const desc of opDef.params) {
+          opP[desc.id] = (op.params && op.params[desc.id] != null) ? op.params[desc.id] : desc.default;
+        }
+        const ctx = { seed: state.seed, layerId: layer.id, opIdx: i };
+        sdf = opDef.apply(sdf, opP, ctx);
+      }
+      sdfs.push(sdf);
     }
-    // sdfUnion needs at least one input. If the user has emptied the
-    // layer list, render a tiny invisible safety sphere far below the
-    // horizon so the rest of the pipeline doesn't choke on an empty union.
     if (sdfs.length === 0) return makeSphere(0, -10, 0, 0.001);
     return sdfUnion(sdfs, Math.max(0, builderState.smoothK || 0));
   },
   renderCustomUi: function (panel) {
+    // Helper: render a single param input (numeric or enum) with the
+    // dataset attributes the event wiring below uses to route changes.
+    function paramInputHtml(scope, scopeId, opIdx, p, val) {
+      // scope: 'layer' or 'op'. scopeId: layer id or layer:opIdx for ops.
+      const attrs =
+        'data-scope="' + scope + '" data-scopeid="' + scopeId + '"' +
+        (opIdx != null ? ' data-opidx="' + opIdx + '"' : '') +
+        ' data-paramid="' + p.id + '"';
+      if (p.type === 'enum') {
+        let opts = '';
+        for (const o of p.options) {
+          opts += '<option value="' + o + '"' + (o === val ? ' selected' : '') + '>' + o + '</option>';
+        }
+        return '<div class="field"><label>' + p.label + '</label>' +
+               '<select ' + attrs +
+               ' style="width:78px;padding:3px 5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:3px;font:inherit">' +
+               opts + '</select></div>';
+      }
+      return '<div class="field"><label>' + p.label + '</label>' +
+             '<input ' + attrs +
+             ' type="number" min="' + p.min + '" max="' + p.max +
+             '" step="' + p.step + '" value="' + val + '"></div>';
+    }
     let html = '';
     html += '<div class="field"><label>Smooth K</label>' +
             '<input id="builder_smoothK" type="number" min="0" max="0.5" step="0.02" value="' +
@@ -2064,11 +2162,36 @@ SCENES.builder = {
               '</div>';
       for (const p of def.params) {
         const val = (layer.params[p.id] != null) ? layer.params[p.id] : p.default;
-        html += '<div class="field"><label>' + p.label + '</label>' +
-                '<input data-layerid="' + layer.id + '" data-paramid="' + p.id +
-                '" type="number" min="' + p.min + '" max="' + p.max +
-                '" step="' + p.step + '" value="' + val + '"></div>';
+        html += paramInputHtml('layer', layer.id, null, p, val);
       }
+      // Operator chain
+      const ops = layer.ops || [];
+      for (let oi = 0; oi < ops.length; oi++) {
+        const op = ops[oi];
+        const opDef = BUILDER_OPS[op.type];
+        if (!opDef) continue;
+        html += '<div style="margin:4px 0;padding:4px 6px;background:#181818;border-left:2px solid #335;border-radius:3px">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;font-size:10px;color:#aac">' +
+                '<span>· ' + opDef.label + '</span>' +
+                '<button data-removeop="' + layer.id + ':' + oi + '" style="background:#522;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:10px;padding:0 4px">×</button>' +
+                '</div>';
+        for (const p of opDef.params) {
+          const val = (op.params && op.params[p.id] != null) ? op.params[p.id] : p.default;
+          html += paramInputHtml('op', layer.id, oi, p, val);
+        }
+        html += '</div>';
+      }
+      // Add-op footer for this layer
+      let opAddOpts = '';
+      for (const k of Object.keys(BUILDER_OPS)) {
+        opAddOpts += '<option value="' + k + '">' + BUILDER_OPS[k].label + '</option>';
+      }
+      html += '<div style="margin-top:4px;display:flex;gap:4px;font-size:10px">' +
+              '<select data-addopfor="' + layer.id + '" style="flex:1;background:#1a1a1a;color:#bbb;border:1px solid #2a2a2a;border-radius:3px;font:inherit;padding:1px 3px">' +
+              opAddOpts +
+              '</select>' +
+              '<button data-addopbtn="' + layer.id + '" style="background:#234;color:#bcd;border:none;border-radius:3px;cursor:pointer;padding:1px 6px;font-size:10px">+ op</button>' +
+              '</div>';
       html += '</div>';
     }
     // Add-primitive footer
@@ -2080,24 +2203,41 @@ SCENES.builder = {
             '<select id="builder_addType" style="flex:1;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit;padding:3px">' +
             addOpts +
             '</select>' +
-            '<button id="builder_add" style="background:#225;color:#fff;border:none;border-radius:3px;cursor:pointer;padding:3px 10px">+ Add</button>' +
+            '<button id="builder_add" style="background:#225;color:#fff;border:none;border-radius:3px;cursor:pointer;padding:3px 10px">+ Add layer</button>' +
+            '</div>';
+    // Export footer
+    html += '<div style="margin-top:10px;display:flex;gap:6px;align-items:center">' +
+            '<button id="builder_copyUrl" style="background:#232;color:#bdb;border:none;border-radius:3px;cursor:pointer;padding:3px 10px;font-size:11px">Copy URL</button>' +
+            '<button id="builder_copyJs" style="background:#332;color:#dbb;border:none;border-radius:3px;cursor:pointer;padding:3px 10px;font-size:11px">Copy as JS</button>' +
             '</div>';
     panel.innerHTML = html;
 
-    // Wire param inputs: mutate builderState.layers in place; re-render
-    // is triggered explicitly by the global Render button.
-    panel.querySelectorAll('input[data-layerid]').forEach(el => {
+    // Wire param inputs (both numeric and enum) — mutate builderState in
+    // place; re-render is triggered by the global Render button.
+    panel.querySelectorAll('[data-paramid]').forEach(el => {
       el.addEventListener('change', () => {
-        const lid = el.getAttribute('data-layerid');
+        const scope = el.getAttribute('data-scope');
+        const scopeId = el.getAttribute('data-scopeid');
+        const opIdx = el.getAttribute('data-opidx');
         const pid = el.getAttribute('data-paramid');
-        const layer = builderState.layers.find(l => l.id === lid);
+        const layer = builderState.layers.find(l => l.id === scopeId);
         if (!layer) return;
-        layer.params[pid] = parseFloat(el.value);
+        const isSelect = el.tagName === 'SELECT';
+        const newVal = isSelect ? el.value : parseFloat(el.value);
+        if (scope === 'layer') {
+          layer.params[pid] = newVal;
+        } else if (scope === 'op' && opIdx != null) {
+          const op = layer.ops[+opIdx];
+          if (op) {
+            if (!op.params) op.params = {};
+            op.params[pid] = newVal;
+          }
+        }
       });
       el.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
     });
 
-    // Wire remove buttons.
+    // Wire remove-layer buttons.
     panel.querySelectorAll('button[data-removelayer]').forEach(el => {
       el.addEventListener('click', () => {
         const lid = el.getAttribute('data-removelayer');
@@ -2106,7 +2246,39 @@ SCENES.builder = {
       });
     });
 
-    // Wire add button.
+    // Wire remove-op buttons.
+    panel.querySelectorAll('button[data-removeop]').forEach(el => {
+      el.addEventListener('click', () => {
+        const ref = el.getAttribute('data-removeop').split(':');
+        const lid = ref[0];
+        const oi = +ref[1];
+        const layer = builderState.layers.find(l => l.id === lid);
+        if (layer && layer.ops) {
+          layer.ops.splice(oi, 1);
+          SCENES.builder.renderCustomUi(panel);
+        }
+      });
+    });
+
+    // Wire add-op buttons (one per layer).
+    panel.querySelectorAll('button[data-addopbtn]').forEach(el => {
+      el.addEventListener('click', () => {
+        const lid = el.getAttribute('data-addopbtn');
+        const select = panel.querySelector('select[data-addopfor="' + lid + '"]');
+        const t = select.value;
+        const opDef = BUILDER_OPS[t];
+        if (!opDef) return;
+        const layer = builderState.layers.find(l => l.id === lid);
+        if (!layer) return;
+        if (!layer.ops) layer.ops = [];
+        const params = {};
+        for (const p of opDef.params) params[p.id] = p.default;
+        layer.ops.push({ type: t, params: params });
+        SCENES.builder.renderCustomUi(panel);
+      });
+    });
+
+    // Wire add-layer button.
     document.getElementById('builder_add').addEventListener('click', () => {
       const t = document.getElementById('builder_addType').value;
       const def = BUILDER_PRIMITIVES[t];
@@ -2116,7 +2288,8 @@ SCENES.builder = {
       builderState.layers.push({
         id: 'L' + (builderState.nextId++),
         type: t,
-        params: params
+        params: params,
+        ops: []
       });
       SCENES.builder.renderCustomUi(panel);
     });
@@ -2127,8 +2300,125 @@ SCENES.builder = {
       builderState.smoothK = parseFloat(sk.value);
     });
     sk.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
+
+    // Wire export buttons.
+    document.getElementById('builder_copyUrl').addEventListener('click', () => {
+      const url = window.location.pathname + '?' +
+                  new URLSearchParams({ scene: 'builder', builder: serialiseBuilder() }).toString();
+      navigator.clipboard.writeText(window.location.origin + url).then(() => {
+        setStatus('Builder URL copied to clipboard.');
+      }).catch(() => {
+        // Fallback: show in a prompt
+        prompt('Copy this URL:', window.location.origin + url);
+      });
+    });
+    document.getElementById('builder_copyJs').addEventListener('click', () => {
+      const js = builderToJs();
+      navigator.clipboard.writeText(js).then(() => {
+        setStatus('Builder JS copied to clipboard.');
+      }).catch(() => {
+        prompt('Copy this JS:', js);
+      });
+    });
   }
 };
+
+// ----- Builder serialisation + JS export -----
+//
+// `serialiseBuilder()` packs builderState.layers + smoothK into a compact
+// JSON string and base64-encodes it for safe URL transport. The inverse
+// `deserialiseBuilder(str)` restores it.
+function serialiseBuilder() {
+  const minimal = {
+    s: builderState.smoothK,
+    l: builderState.layers.map(function (layer) {
+      return {
+        t: layer.type,
+        p: layer.params,
+        o: (layer.ops || []).map(function (op) {
+          return { t: op.type, p: op.params };
+        })
+      };
+    })
+  };
+  try {
+    return btoa(unescape(encodeURIComponent(JSON.stringify(minimal))));
+  } catch (e) {
+    return '';
+  }
+}
+function deserialiseBuilder(encoded) {
+  if (!encoded) return false;
+  try {
+    const obj = JSON.parse(decodeURIComponent(escape(atob(encoded))));
+    if (!obj || !obj.l) return false;
+    builderState.smoothK = obj.s != null ? obj.s : 0.05;
+    builderState.layers = obj.l.map(function (L, i) {
+      return {
+        id: 'L' + (i + 1),
+        type: L.t,
+        params: L.p || {},
+        ops: (L.o || []).map(function (O) {
+          return { type: O.t, params: O.p || {} };
+        })
+      };
+    });
+    builderState.nextId = builderState.layers.length + 1;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// `builderToJs()` generates a paste-ready SCENES entry equivalent to the
+// current builder composition.
+function builderToJs() {
+  function primCall(layer) {
+    const def = BUILDER_PRIMITIVES[layer.type];
+    if (!def) return 'makeSphere(0,0,0,0.01) /* unknown ' + layer.type + ' */';
+    const args = def.params.map(function (p) {
+      const v = (layer.params[p.id] != null) ? layer.params[p.id] : p.default;
+      return JSON.stringify(v);
+    }).join(', ');
+    // Map registry name back to the codebase function name.
+    const fnByType = {
+      sphere: 'makeSphere', box: 'makeBox', cylinderY: 'makeCylinderY',
+      coneY: 'makeConeY', capsuleX: 'makeCapsuleX', octahedron: 'makeOctahedron'
+    };
+    return (fnByType[layer.type] || layer.type) + '(' + args + ')';
+  }
+  function wrapOps(expr, ops) {
+    let cur = expr;
+    for (const op of (ops || [])) {
+      const opDef = BUILDER_OPS[op.type];
+      if (!opDef) continue;
+      const ps = opDef.params.map(function (p) {
+        const v = (op.params && op.params[p.id] != null) ? op.params[p.id] : p.default;
+        return JSON.stringify(v);
+      });
+      if (op.type === 'mirror') {
+        cur = "mirror(" + cur + ", " + ps[0] + ")";
+      } else if (op.type === 'translate') {
+        cur = "translate(" + cur + ", " + ps.join(', ') + ")";
+      } else if (op.type === 'displace') {
+        const freq = ps[0], amp = ps[1];
+        cur = "displace(" + cur + ", function(x,y,z){var n=makeNoise3D(state.seed+':myDisp');return n(x*" +
+              freq + ",y*" + freq + ",z*" + freq + ");}, " + amp + ")";
+      } else {
+        cur = op.type + "(" + cur + ", " + ps.join(', ') + ")";
+      }
+    }
+    return cur;
+  }
+  const lines = builderState.layers.map(function (layer) {
+    return '    ' + wrapOps(primCall(layer), layer.ops);
+  });
+  return 'SCENES.myScene = function (rng, state) {\n' +
+         '  return sdfUnion([\n' +
+         lines.join(',\n') + '\n' +
+         '  ], ' + (builderState.smoothK || 0) + ');\n' +
+         '};';
+}
 
 // ============================================================
 // Camera + raymarch (orthographic in y, mild perspective in z so the
@@ -4022,6 +4312,11 @@ function readSceneParams(sceneName) {
 
 function syncFromUrl() {
   const params = new URLSearchParams(window.location.search);
+  // If the URL carries a serialised builder composition, restore it
+  // before rendering the builder's UI so the inputs reflect the layers.
+  if (params.has('builder')) {
+    deserialiseBuilder(params.get('builder'));
+  }
   // If the URL specifies a scene with dynamic UI, render its panel first
   // so the per-scene inputs exist before we copy values into them.
   const urlScene = params.get('scene');
@@ -4045,6 +4340,9 @@ function writeUrl(state) {
                 'brightness','contrast','gamma','posterLevels',
                    'cloudThreshold']) {
     if (state[k] != null) params.set(k, state[k]);
+  }
+  if (state.scene === 'builder') {
+    params.set('builder', serialiseBuilder());
   }
   const url = window.location.pathname + '?' + params.toString();
   window.history.replaceState({}, '', url);
