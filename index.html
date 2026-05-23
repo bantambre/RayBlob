@@ -1033,14 +1033,16 @@ const SCENES = {
       { id: 'beamRays',        label: 'Ray count',      type: 'int',    min: 5,    max: 60,   step: 1,    default: 34   },
       { id: 'beamSpreadDeg',   label: 'Ray spread (°)', type: 'number', min: 4,    max: 60,   step: 1,    default: 7    },
       { id: 'rockStacks',      label: 'Rock stacks',    type: 'int',    min: 1,    max: 3,    step: 1,    default: 2    },
-      { id: 'rockShards',      label: 'Rock shards',    type: 'int',    min: 4,    max: 8,    step: 1,    default: 6    },
-      { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.20, max: 1.50, step: 0.05, default: 0.70 },
+      { id: 'rockShards',      label: 'Rock shards',    type: 'int',    min: 4,    max: 12,   step: 1,    default: 7    },
+      { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.20, max: 3.00, step: 0.05, default: 1.10 },
       { id: 'rockVerticality', label: 'Rock vert.',     type: 'number', min: 0.6,  max: 3.5,  step: 0.1,  default: 1.6  },
-      { id: 'rockSpread',      label: 'Rock spread',    type: 'number', min: 0.20, max: 1.50, step: 0.05, default: 0.50 },
+      { id: 'rockSpread',      label: 'Rock spread',    type: 'number', min: 0.20, max: 3.00, step: 0.05, default: 0.85 },
       { id: 'rockSmoothK',     label: 'Rock smooth K',  type: 'number', min: 0.00, max: 0.20, step: 0.01, default: 0.03 },
       { id: 'rockTaper',       label: 'Stack taper',    type: 'number', min: 0.10, max: 0.70, step: 0.05, default: 0.40 },
       { id: 'rockOverlap',     label: 'Rock overlap',   type: 'number', min: -0.05, max: 0.35, step: 0.02, default: 0.12 },
-      { id: 'rockJaggedness',  label: 'Rock jaggedness',type: 'number', min: 0.00, max: 0.12, step: 0.005, default: 0.04 }
+      { id: 'rockJaggedness',  label: 'Rock jaggedness',type: 'number', min: 0.00, max: 0.12, step: 0.005, default: 0.04 },
+      { id: 'foundationWidth', label: 'Foundation',     type: 'number', min: 0.00, max: 3.50, step: 0.10, default: 1.80 },
+      { id: 'clusterRocks',    label: 'Cluster rocks',  type: 'int',    min: 0,    max: 5,    step: 1,    default: 2    }
     ],
     build: function (rng, state, params) {
       // Lighthouse perched on a faceted monument-style rock, off-centre
@@ -1105,6 +1107,45 @@ const SCENES = {
           verticality: params.rockVerticality,
           pointiness: 0.20,
           scale: scales[s]
+        }));
+      }
+      // Foundation — a wide, flat octahedral blob at the base of the
+      // stack. Verticality 0.30 squashes it horizontally so it reads
+      // as a rocky outcrop rather than another spire. Sits below the
+      // bottommost stack with an overlap so the two smooth-merge.
+      if (params.foundationWidth > 0) {
+        const fScale = params.rockScale * params.foundationWidth;
+        const fHalfH = fScale * 0.475 * 0.30; // verticality 0.30 → flatter
+        const fY = positions[0] - halfHeights[0] * 0.60;
+        stackParts.push(makeOctahedralBlobAt(rng, {
+          center: [baseX, fY, 0],
+          nSpheres: Math.max(4, params.rockShards),
+          smoothK: params.rockSmoothK,
+          spread: 1.40,
+          verticality: 0.30,
+          pointiness: 0,
+          scale: fScale
+        }));
+      }
+      // Cluster rocks — N additional smaller rocks scattered laterally
+      // around the base. Each gets its own random offset, scale, and
+      // z-depth jitter so the cluster reads as a natural rocky outcrop.
+      const clusterCount = params.clusterRocks || 0;
+      for (let i = 0; i < clusterCount; i++) {
+        const sideSign = (rng() < 0.5) ? -1 : 1;
+        const lateral  = (0.18 + rng() * 0.32) * sideSign;
+        const cx = baseX + lateral;
+        const cy = positions[0] - halfHeights[0] * (0.20 + rng() * 0.40);
+        const cz = (rng() - 0.5) * 0.25;
+        const cScale = params.rockScale * (0.30 + rng() * 0.30);
+        stackParts.push(makeOctahedralBlobAt(rng, {
+          center: [cx, cy, cz],
+          nSpheres: 5,
+          smoothK: params.rockSmoothK,
+          spread: 0.60,
+          verticality: 0.85,
+          pointiness: 0,
+          scale: cScale
         }));
       }
       let rock = sdfUnion(stackParts, 0.025);
