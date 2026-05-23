@@ -131,6 +131,8 @@
       <select id="hatchStyle"
               style="width:140px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
         <option value="scan" selected>Scan (4-angle)</option>
+        <option value="crosshatch">Crosshatch (H + V)</option>
+        <option value="vertical">Vertical only</option>
         <option value="isoDepth">Iso-depth contours</option>
         <option value="projNormal">Projected normal</option>
         <option value="principal">Principal curvature</option>
@@ -2126,6 +2128,92 @@ function generateHatches(state, buf) {
 }
 
 // ============================================================
+// Crosshatch hatcher: just horizontals + verticals. Two-tier threshold:
+// horizontals always draw on the surface; verticals only draw in regions
+// darker than 'crossThreshold'. Lightweight alternative to the 4-angle
+// scan-line.
+// ============================================================
+function generateCrosshatchHatches(state, buf) {
+  const paths = [];
+  const worldStep = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
+  const sampleStep = Math.max(0.0015, worldStep * 0.35);
+  const RANGE = 1.8;
+  const angles = [0, Math.PI / 2];
+  const crossThreshold = 0.40;
+  for (let a = 0; a < angles.length; a++) {
+    const ang = angles[a];
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const phase = (a % 2) * worldStep * 0.5;
+    for (let s = -RANGE + phase; s <= RANGE; s += worldStep) {
+      const sx0 = -sa * s;
+      const sy0 = ca * s;
+      let inDraw = false;
+      let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+      for (let t = -RANGE; t <= RANGE; t += sampleStep) {
+        const sx = sx0 + ca * t;
+        const sy = sy0 + sa * t;
+        const inBounds = (sx >= SX_MIN && sx <= SX_MAX &&
+                          sy >= SY_MIN && sy <= SY_MAX);
+        let draw = false;
+        if (inBounds) {
+          const idx = bufIdx(buf, sx, sy);
+          if (idx >= 0 && buf.surface[idx] === 1) {
+            const darkness = (1 - buf.light[idx]) +
+                             (buf.shadow[idx] ? 0.30 : 0);
+            draw = (a === 0) ? true : (darkness > crossThreshold);
+          }
+        }
+        if (draw) {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
+        } else if (inDraw) {
+          if (Math.hypot(lastX - dx0, lastY - dy0) > worldStep * 0.4) {
+            paths.push([[dx0, dy0], [lastX, lastY]]);
+          }
+          inDraw = false;
+        }
+      }
+      if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > worldStep * 0.4) {
+        paths.push([[dx0, dy0], [lastX, lastY]]);
+      }
+    }
+  }
+  return paths;
+}
+
+// ============================================================
+// Vertical-only hatcher: single pass of evenly-spaced vertical scan
+// lines, clipped to the blob surface. Reads as engraving / wood-cut.
+// ============================================================
+function generateVerticalHatches(state, buf) {
+  const paths = [];
+  const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
+  const sampleStep = baseSpacing * 0.4;
+  const RANGE = 1.8;
+  for (let sx = -RANGE; sx <= RANGE; sx += baseSpacing) {
+    let inDraw = false;
+    let sy0 = 0, lastY = 0;
+    for (let sy = SY_MIN; sy <= SY_MAX; sy += sampleStep) {
+      const idx = bufIdx(buf, sx, sy);
+      const draw = (idx >= 0 && buf.surface[idx] === 1);
+      if (draw) {
+        if (!inDraw) { sy0 = sy; inDraw = true; }
+        lastY = sy;
+      } else if (inDraw) {
+        if (Math.abs(lastY - sy0) > baseSpacing * 0.4) {
+          paths.push([[sx, sy0], [sx, lastY]]);
+        }
+        inDraw = false;
+      }
+    }
+    if (inDraw && Math.abs(lastY - sy0) > baseSpacing * 0.4) {
+      paths.push([[sx, sy0], [sx, lastY]]);
+    }
+  }
+  return paths;
+}
+
+// ============================================================
 // Tone mapping on buf.light. Applied after raymarching, before the hatcher
 // reads brightness for stroke-density decisions.
 //
@@ -3482,6 +3570,8 @@ async function doRender() {
     await tick();
     let blob;
     switch (state.hatchStyle) {
+      case 'crosshatch': blob = generateCrosshatchHatches(state, buf);             break;
+      case 'vertical':   blob = generateVerticalHatches(state, buf);               break;
       case 'isoDepth':   blob = generateCurveHatches(state, buf, fieldIsoDepth);   break;
       case 'projNormal': blob = generateCurveHatches(state, buf, fieldProjNormal); break;
       case 'principal':  blob = generateCurveHatches(state, buf, fieldPrincipal);  break;
