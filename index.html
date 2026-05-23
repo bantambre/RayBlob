@@ -114,12 +114,10 @@
         <option value="smoke">Smoke column</option>
       </select>
     </div>
-    <div class="field"><label>Blob spheres</label><input id="nSpheres" type="number" min="4" max="12" value="4"></div>
-    <div class="field"><label>Spread</label><input id="spread" type="number" min="0.2" max="3.0" step="0.1" value="1.0"></div>
-    <div class="field"><label>Verticality</label><input id="verticality" type="number" min="0.4" max="3.0" step="0.1" value="1.4"></div>
-    <div class="field"><label>Pointiness</label><input id="pointiness" type="number" min="0" max="2.0" step="0.1" value="0"></div>
-    <div class="field"><label>Smoothing k</label><input id="smoothK" type="number" min="0.05" max="0.8" step="0.05" value="0.3"></div>
     <div class="field"><label>Cam tilt (°)</label><input id="camTilt" type="number" min="0" max="20" step="0.5" value="6"></div>
+
+    <h2 id="sceneParamsHeader" style="display:none">Scene parameters</h2>
+    <div id="sceneParamsPanel"></div>
     <div class="field"><label>Ground style</label>
       <select id="groundStyle"
               style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
@@ -882,18 +880,36 @@ function hashStringToInt(str) {
 
 // ============================================================
 // Scene registry. Adding a new sister project = adding an entry here.
-// Each entry receives (rng, state) and returns the full scene SDF.
+//
+// Two entry shapes are accepted:
+//   1. A function of (rng, state) — back-compat shape; scenes with no
+//      tunable parameters just use this. State carries global controls
+//      (lw, density, light, camera tilt, etc.) only.
+//   2. An object { ui: [...], build: function (rng, state, params) }
+//      where `ui` is a list of param descriptors rendered into the
+//      "Scene parameters" panel, and `build` receives the live values.
+//      Param descriptors: { id, label, type: 'int' | 'number', min, max,
+//      step?, default }.
 // ============================================================
 const SCENES = {
-  single: function (rng, state) {
-    return makeBlobSDFAt(rng, {
-      center: [0, 0, 0],
-      nSpheres: state.nSpheres,
-      smoothK: state.smoothK,
-      spread: state.spread,
-      verticality: state.verticality,
-      pointiness: state.pointiness
-    });
+  single: {
+    ui: [
+      { id: 'nSpheres',    label: 'Blob spheres', type: 'int',    min: 4,    max: 12,  step: 1,    default: 4   },
+      { id: 'spread',      label: 'Spread',       type: 'number', min: 0.2,  max: 3.0, step: 0.1,  default: 1.0 },
+      { id: 'verticality', label: 'Verticality',  type: 'number', min: 0.4,  max: 3.0, step: 0.1,  default: 1.4 },
+      { id: 'pointiness',  label: 'Pointiness',   type: 'number', min: 0,    max: 2.0, step: 0.1,  default: 0   },
+      { id: 'smoothK',     label: 'Smoothing k',  type: 'number', min: 0.05, max: 0.8, step: 0.05, default: 0.3 }
+    ],
+    build: function (rng, state, params) {
+      return makeBlobSDFAt(rng, {
+        center: [0, 0, 0],
+        nSpheres: params.nSpheres,
+        smoothK: params.smoothK,
+        spread: params.spread,
+        verticality: params.verticality,
+        pointiness: params.pointiness
+      });
+    }
   },
   monoliths: function (rng, state) {
     // 5 tall, slim, pointed stones spread across x. Sharp union so each
@@ -3470,15 +3486,21 @@ function lwToStrokeVB(lwMM) { return lwMM * (300 / 25.4); }
 // ============================================================
 // State + UI glue
 // ============================================================
+function getInputValue(id, fallback) {
+  const el = document.getElementById(id);
+  return el ? el.value : fallback;
+}
 function readState() {
   return {
     seed: document.getElementById('seed').value || '0',
     scene: document.getElementById('scene').value,
-    nSpheres: clampInt(document.getElementById('nSpheres').value, 4, 12, 4),
-    spread: clampFloat(document.getElementById('spread').value, 0.2, 3.0, 1.0),
-    verticality: clampFloat(document.getElementById('verticality').value, 0.4, 3.0, 1.4),
-    pointiness: clampFloat(document.getElementById('pointiness').value, 0, 2.0, 0),
-    smoothK: clampFloat(document.getElementById('smoothK').value, 0.05, 0.8, 0.3),
+    // Composition fields below only exist in the DOM when the active
+    // scene declares them in its ui schema (currently just `single`).
+    nSpheres:    clampInt  (getInputValue('nSpheres',    4),   4,    12,  4),
+    spread:      clampFloat(getInputValue('spread',      1.0), 0.2,  3.0, 1.0),
+    verticality: clampFloat(getInputValue('verticality', 1.4), 0.4,  3.0, 1.4),
+    pointiness:  clampFloat(getInputValue('pointiness',  0),   0,    2.0, 0),
+    smoothK:     clampFloat(getInputValue('smoothK',     0.3), 0.05, 0.8, 0.3),
     camTilt: clampFloat(document.getElementById('camTilt').value, 0, 20, 6),
     hatchStyle: document.getElementById('hatchStyle').value,
     skyStyle: document.getElementById('skyStyle').value,
@@ -3508,14 +3530,68 @@ function clampFloat(v, lo, hi, fb) {
 function setStatus(msg) { document.getElementById('stats').textContent = msg; }
 function tick() { return new Promise(r => setTimeout(r, 0)); }
 
+// Render the dynamic "Scene parameters" panel for the given scene. Hides
+// the section entirely if the scene has no UI schema.
+function renderSceneUi(sceneName) {
+  const panel = document.getElementById('sceneParamsPanel');
+  const header = document.getElementById('sceneParamsHeader');
+  const scene = SCENES[sceneName];
+  if (!scene || typeof scene === 'function' || !scene.ui) {
+    panel.innerHTML = '';
+    header.style.display = 'none';
+    return;
+  }
+  header.style.display = '';
+  let html = '';
+  for (const c of scene.ui) {
+    const step = c.step != null ? c.step : (c.type === 'int' ? 1 : 0.1);
+    html += '<div class="field"><label>' + c.label + '</label>' +
+            '<input id="' + c.id + '" type="number"' +
+            ' min="' + c.min + '" max="' + c.max +
+            '" step="' + step + '" value="' + c.default + '"></div>';
+  }
+  panel.innerHTML = html;
+  // Inputs created dynamically don't carry the Enter-key listener wired
+  // up at startup, so attach one now.
+  panel.querySelectorAll('input').forEach(el => {
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
+  });
+}
+
+// Read current values from the per-scene UI inputs, validated against
+// the schema's min/max/default. Returns null if the scene has no UI.
+function readSceneParams(sceneName) {
+  const scene = SCENES[sceneName];
+  if (!scene || typeof scene === 'function' || !scene.ui) return null;
+  const out = {};
+  for (const c of scene.ui) {
+    const el = document.getElementById(c.id);
+    if (!el) { out[c.id] = c.default; continue; }
+    if (c.type === 'int') {
+      out[c.id] = clampInt(el.value, c.min, c.max, c.default);
+    } else {
+      out[c.id] = clampFloat(el.value, c.min, c.max, c.default);
+    }
+  }
+  return out;
+}
+
 function syncFromUrl() {
   const params = new URLSearchParams(window.location.search);
+  // If the URL specifies a scene with dynamic UI, render its panel first
+  // so the per-scene inputs exist before we copy values into them.
+  const urlScene = params.get('scene');
+  if (urlScene) {
+    document.getElementById('scene').value = urlScene;
+    renderSceneUi(urlScene);
+  }
   const keys = ['seed','scene','lw','density','nSpheres','spread','verticality',
                 'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness',
                 'brightness','contrast','gamma','posterLevels',
                 'cloudThreshold','bufRes','lx','ly','lz'];
   for (const k of keys) {
-    if (params.has(k)) document.getElementById(k).value = params.get(k);
+    const el = document.getElementById(k);
+    if (el && params.has(k)) el.value = params.get(k);
   }
 }
 function writeUrl(state) {
@@ -3524,7 +3600,7 @@ function writeUrl(state) {
                    'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness',
                 'brightness','contrast','gamma','posterLevels',
                    'cloudThreshold']) {
-    params.set(k, state[k]);
+    if (state[k] != null) params.set(k, state[k]);
   }
   const url = window.location.pathname + '?' + params.toString();
   window.history.replaceState({}, '', url);
@@ -3548,8 +3624,14 @@ async function doRender() {
     // Scenes can return either a bare SDF function OR `{ sdf, camera }`
     // where `camera` is the same options object that setupCamera() accepts.
     // A scene-supplied camera overrides the UI camTilt for that render.
-    const sceneFn = SCENES[state.scene] || SCENES.single;
-    const sceneResult = sceneFn(rng, state);
+    const sceneEntry = SCENES[state.scene] || SCENES.single;
+    let sceneResult;
+    if (typeof sceneEntry === 'function') {
+      sceneResult = sceneEntry(rng, state);
+    } else {
+      const params = readSceneParams(state.scene);
+      sceneResult = sceneEntry.build(rng, state, params);
+    }
     let sdf, sceneCamera = null;
     if (typeof sceneResult === 'function') {
       sdf = sceneResult;
@@ -3684,10 +3766,18 @@ function doRandomize() {
 document.getElementById('render').addEventListener('click', doRender);
 document.getElementById('save').addEventListener('click', doSave);
 document.getElementById('randomize').addEventListener('click', doRandomize);
+document.getElementById('scene').addEventListener('change', e => {
+  renderSceneUi(e.target.value);
+});
 document.querySelectorAll('.panel input').forEach(el => {
   el.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
 });
 
+// Render the per-scene UI before syncFromUrl so the dynamic inputs exist
+// when URL values are written to them. syncFromUrl also calls renderSceneUi
+// when the URL specifies a scene, so this initial call handles the "no
+// URL scene param → default scene" case.
+renderSceneUi(document.getElementById('scene').value);
 syncFromUrl();
 doRender();
 </script>
