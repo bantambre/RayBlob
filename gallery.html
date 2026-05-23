@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RayBlob · gallery</title>
+<style>
+  body { margin: 0; padding: 16px; background: #1a1a1a; color: #eee;
+         font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
+  h1   { font-size: 18px; margin: 0 0 8px; }
+  .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; padding: 8px;
+         background: #232323; border-radius: 6px; flex-wrap: wrap; }
+  .bar label { color: #aaa; font-size: 12px; }
+  select, button, input { background: #1a1a1a; color: #eee; border: 1px solid #3a3a3a;
+                          border-radius: 4px; padding: 5px 9px; font: inherit; }
+  button { cursor: pointer; }
+  button:hover { background: #2a2a2a; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #grid { display: grid; gap: 14px;
+          grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .card { background: #232323; border: 1px solid #2a2a2a; border-radius: 6px;
+          padding: 8px; }
+  .card svg { width: 100%; height: auto; background: white; border-radius: 3px;
+              display: block; }
+  .card .title { font-weight: 600; margin: 8px 0 4px; color: #cde; font-size: 13px; }
+  .card .meta  { font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+                 color: #999; white-space: pre-wrap; word-break: break-word; }
+  .card .url   { font-family: ui-monospace, Menlo, monospace; font-size: 10px;
+                 color: #678; margin-top: 4px; word-break: break-all; }
+  .card .url a { color: #79c; text-decoration: none; }
+  #status { color: #ccd; margin-left: auto; font-size: 12px; }
+  iframe#renderer { width: 1px; height: 1px; opacity: 0; pointer-events: none;
+                    position: fixed; top: 0; left: 0; border: 0; }
+</style>
+</head>
+<body>
+<h1>RayBlob gallery</h1>
+
+<div class="bar">
+  <label>Matrix</label>
+  <select id="matrix">
+    <option value="hatch">Hatch styles (single blob)</option>
+    <option value="sky">Sky styles (lighthouse)</option>
+    <option value="scenes">Scene tour (default settings)</option>
+    <option value="lighthouseScale">Lighthouse · Rock scale sweep</option>
+    <option value="lighthouseJag">Lighthouse · Rock jaggedness sweep</option>
+    <option value="lighthouseRound">Lighthouse · Round mix sweep</option>
+    <option value="tone">Tone (single blob)</option>
+  </select>
+  <label>Seed</label>
+  <input id="seed" type="text" value="42" style="width:80px">
+  <label>Buffer res</label>
+  <input id="bufRes" type="number" min="150" max="800" step="50" value="300" style="width:70px">
+  <button id="run">Run</button>
+  <button id="stop" disabled>Stop</button>
+  <div id="status">idle</div>
+</div>
+
+<div id="grid"></div>
+
+<iframe id="renderer" src="index.html"></iframe>
+
+<script>
+// --- Test matrices --------------------------------------------------------
+// Each matrix is a list of { title, state } where state is a partial state
+// override applied on top of the renderer's defaultState(). The state can
+// include `sceneParams` for per-scene parameter overrides.
+
+const MATRICES = {
+  hatch: function () {
+    const styles = ['scan', 'crosshatch', 'vertical', 'cell', 'monet',
+                    'isoDepth', 'projNormal', 'principal'];
+    return styles.map(function (h) {
+      return {
+        title: 'hatch · ' + h,
+        state: { scene: 'single', hatchStyle: h, skyStyle: 'gradient' }
+      };
+    });
+  },
+
+  sky: function () {
+    const styles = ['gradient', 'wobbly', 'multiGradient', 'paperGrain',
+                    'arcs', 'stars', 'cellular', 'none'];
+    return styles.map(function (s) {
+      return {
+        title: 'sky · ' + s,
+        state: { scene: 'lighthouse', skyStyle: s, hatchStyle: 'scan',
+                 groundStyle: 'waves' }
+      };
+    });
+  },
+
+  scenes: function () {
+    const tour = ['single', 'monoliths', 'arch', 'iceberg', 'pyramid', 'cone',
+                  'lighthouse', 'cairn', 'volcano', 'forest', 'twistedColumn',
+                  'recursiveTower', 'ufo', 'mountains', 'tornado', 'mengerSponge',
+                  'cathedralInterior', 'astronaut', 'aurora', 'searchlight'];
+    return tour.map(function (s) {
+      return {
+        title: 'scene · ' + s,
+        state: { scene: s }
+      };
+    });
+  },
+
+  lighthouseScale: function () {
+    const scales = [0.40, 0.70, 1.10, 1.60, 2.20];
+    return scales.map(function (sc) {
+      return {
+        title: 'rockScale = ' + sc.toFixed(2),
+        state: {
+          scene: 'lighthouse',
+          sceneParams: { rockScale: sc, rockStacks: 2, rockJaggedness: 0.08,
+                         rockRoundMix: 0.40, foundationWidth: 1.80,
+                         clusterRocks: 2 }
+        }
+      };
+    });
+  },
+
+  lighthouseJag: function () {
+    const jags = [0.00, 0.04, 0.08, 0.14, 0.22];
+    return jags.map(function (j) {
+      return {
+        title: 'rockJaggedness = ' + j.toFixed(2),
+        state: {
+          scene: 'lighthouse',
+          sceneParams: { rockJaggedness: j, rockScale: 1.10, rockRoundMix: 0.40 }
+        }
+      };
+    });
+  },
+
+  lighthouseRound: function () {
+    const rs = [0.00, 0.20, 0.40, 0.60, 0.85];
+    return rs.map(function (r) {
+      return {
+        title: 'rockRoundMix = ' + r.toFixed(2),
+        state: {
+          scene: 'lighthouse',
+          sceneParams: { rockRoundMix: r, rockScale: 1.10, rockJaggedness: 0.08 }
+        }
+      };
+    });
+  },
+
+  tone: function () {
+    const cases = [
+      { brightness: 0,   contrast: 1,   gamma: 1,   posterLevels: 1 },
+      { brightness: 0,   contrast: 1.4, gamma: 1,   posterLevels: 1 },
+      { brightness: 0,   contrast: 1,   gamma: 1.6, posterLevels: 1 },
+      { brightness: 0,   contrast: 1,   gamma: 0.6, posterLevels: 1 },
+      { brightness: 0,   contrast: 1,   gamma: 1,   posterLevels: 3 },
+      { brightness: 0,   contrast: 1,   gamma: 1,   posterLevels: 5 },
+      { brightness: 0.2, contrast: 1.4, gamma: 1,   posterLevels: 4 }
+    ];
+    return cases.map(function (c) {
+      return {
+        title: 'b ' + c.brightness + ' · c ' + c.contrast + ' · γ ' + c.gamma +
+               ' · p ' + c.posterLevels,
+        state: Object.assign({ scene: 'single' }, c)
+      };
+    });
+  }
+};
+
+// --- Runner ---------------------------------------------------------------
+
+const grid = document.getElementById('grid');
+const statusEl = document.getElementById('status');
+const runBtn = document.getElementById('run');
+const stopBtn = document.getElementById('stop');
+const matrixSel = document.getElementById('matrix');
+const seedInput = document.getElementById('seed');
+const bufResInput = document.getElementById('bufRes');
+const iframe = document.getElementById('renderer');
+
+let stopFlag = false;
+
+function setStatus(s) { statusEl.textContent = s; }
+
+function rendererReady() {
+  return new Promise(function (resolve) {
+    function check() {
+      if (iframe.contentWindow &&
+          typeof iframe.contentWindow.renderToSvgString === 'function' &&
+          typeof iframe.contentWindow.defaultState === 'function') {
+        resolve(iframe.contentWindow);
+      } else {
+        setTimeout(check, 80);
+      }
+    }
+    check();
+  });
+}
+
+function formatMeta(state) {
+  // Print one key per line, deepening into sceneParams.
+  const lines = [];
+  for (const k of Object.keys(state).sort()) {
+    if (k === 'sceneParams') continue;
+    lines.push(k + ': ' + JSON.stringify(state[k]));
+  }
+  if (state.sceneParams) {
+    lines.push('sceneParams:');
+    for (const k of Object.keys(state.sceneParams).sort()) {
+      lines.push('  ' + k + ': ' + JSON.stringify(state.sceneParams[k]));
+    }
+  }
+  return lines.join('\n');
+}
+
+function urlFor(state) {
+  // Build a URL the user can click to load this exact composition in the
+  // main app. Flatten sceneParams onto the top-level URL params since the
+  // main app's syncFromUrl reads input ids directly.
+  const flat = Object.assign({}, state);
+  if (flat.sceneParams) {
+    Object.assign(flat, flat.sceneParams);
+    delete flat.sceneParams;
+  }
+  const p = new URLSearchParams();
+  for (const k of Object.keys(flat)) {
+    if (flat[k] != null) p.set(k, String(flat[k]));
+  }
+  return 'index.html?' + p.toString();
+}
+
+async function run() {
+  const matrixFn = MATRICES[matrixSel.value];
+  if (!matrixFn) return;
+  stopFlag = false;
+  runBtn.disabled = true;
+  stopBtn.disabled = false;
+  setStatus('warming up…');
+  const cases = matrixFn();
+  grid.innerHTML = '';
+  const ren = await rendererReady();
+  const baseState = Object.assign(ren.defaultState(), {
+    seed: seedInput.value || '42',
+    bufRes: parseInt(bufResInput.value, 10) || 300
+  });
+
+  for (let i = 0; i < cases.length; i++) {
+    if (stopFlag) break;
+    const c = cases[i];
+    setStatus(`rendering ${i + 1}/${cases.length} · ${c.title}`);
+    // Build a fresh state for each case. sceneParams are nested under
+    // state.sceneParams so the renderer resolves them per-scene.
+    const state = Object.assign({}, baseState, c.state);
+    if (c.state.sceneParams) {
+      state.sceneParams = Object.assign({}, c.state.sceneParams);
+    }
+    let result;
+    try {
+      // Let the browser breathe between renders so the UI stays responsive.
+      await new Promise(function (r) { setTimeout(r, 0); });
+      const t0 = performance.now();
+      result = ren.renderToSvgString(state);
+      const t1 = performance.now();
+      result.elapsedMs = Math.round(t1 - t0);
+    } catch (err) {
+      console.error(err);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = '<div class="title">' + escapeHtml(c.title) + '</div>' +
+                       '<div class="meta">ERROR · ' + escapeHtml(err.message) + '</div>';
+      grid.appendChild(card);
+      continue;
+    }
+    const card = document.createElement('div');
+    card.className = 'card';
+    const url = urlFor(state);
+    card.innerHTML =
+      result.svg +
+      '<div class="title">' + escapeHtml(c.title) + '</div>' +
+      '<div class="meta">strokes: ' + result.strokeCount +
+      ' · ' + result.elapsedMs + 'ms\n' +
+      escapeHtml(formatMeta(state)) + '</div>' +
+      '<div class="url"><a href="' + url + '" target="_blank">open in app</a></div>';
+    grid.appendChild(card);
+  }
+  setStatus(stopFlag ? 'stopped' : 'done · ' + cases.length + ' renders');
+  runBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+runBtn.addEventListener('click', run);
+stopBtn.addEventListener('click', function () {
+  stopFlag = true; setStatus('stopping…');
+});
+</script>
+</body>
+</html>

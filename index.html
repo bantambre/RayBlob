@@ -180,6 +180,7 @@
 
     <div class="stats" id="stats">Ready.</div>
     <a class="url-link" id="permalink" href="#">permalink</a>
+    <a class="url-link" href="gallery.html" style="margin-top:4px">→ gallery</a>
   </div>
 
   <div class="stage">
@@ -4755,131 +4756,158 @@ function writeUrl(state) {
 
 let lastRender = null;
 
+// A sensible default state object — every key the renderer reads. The
+// gallery page calls this for a baseline and applies its overrides on top.
+function defaultState() {
+  return {
+    seed: 'gallery', scene: 'single',
+    nSpheres: 4, spread: 1.0, verticality: 1.4, pointiness: 0, smoothK: 0.3,
+    camTilt: 6,
+    hatchStyle: 'scan', skyStyle: 'gradient', groundStyle: 'perspective',
+    waviness: 3.0, cloudThreshold: 0.5,
+    lw: 0.3, density: 2.5, bufRes: 400,
+    lx: -0.6, ly: 0.8, lz: -0.4,
+    brightness: 0, contrast: 1, gamma: 1, posterLevels: 1
+  };
+}
+
+// Synchronous render: state in → SVG markup string out. No DOM reads,
+// no UI updates. The interactive doRender below uses this and then
+// updates the page; the gallery page calls it directly with arbitrary
+// state objects.
+//
+// Pass scene-specific params either inline on `state` (matching the
+// scene's ui ids) OR via `state.sceneParams = { ... }`. If neither is
+// supplied, the scene's UI defaults are used.
+function renderToSvgString(state) {
+  const rng = makeRng(state.seed);
+  const sceneEntry = SCENES[state.scene] || SCENES.single;
+  let sceneResult;
+  if (typeof sceneEntry === 'function') {
+    sceneResult = sceneEntry(rng, state);
+  } else if (sceneEntry.ui === 'custom') {
+    sceneResult = sceneEntry.build(rng, state);
+  } else {
+    // Resolve scene params: explicit state.sceneParams > flat state keys
+    // (for back-compat with the existing single-scene URL params) >
+    // schema defaults.
+    const params = {};
+    for (const c of sceneEntry.ui) {
+      if (state.sceneParams && state.sceneParams[c.id] != null) {
+        params[c.id] = state.sceneParams[c.id];
+      } else if (state[c.id] != null) {
+        params[c.id] = state[c.id];
+      } else {
+        params[c.id] = c.default;
+      }
+    }
+    sceneResult = sceneEntry.build(rng, state, params);
+  }
+  let sdf, sceneCamera = null, sceneMaterialFn = null, sceneBeamMask = null;
+  if (typeof sceneResult === 'function') {
+    sdf = sceneResult;
+  } else {
+    sdf = sceneResult.sdf;
+    sceneCamera = sceneResult.camera || null;
+    sceneMaterialFn = sceneResult.materialFn || null;
+    sceneBeamMask = sceneResult.beamMask || null;
+  }
+  setupCamera(sceneCamera || { tiltDeg: state.camTilt });
+
+  const buf = renderSceneBuffer(state, sdf, sceneMaterialFn);
+  if (sceneBeamMask) applyBeamMask(buf, sceneBeamMask);
+  applyToneMap(buf, state);
+
+  let blob;
+  switch (state.hatchStyle) {
+    case 'crosshatch': blob = generateCrosshatchHatches(state, buf);             break;
+    case 'vertical':   blob = generateVerticalHatches(state, buf);               break;
+    case 'cell':       blob = generateCellHatches(state, buf);                   break;
+    case 'monet':      blob = generateMonetHatches(state, buf);                  break;
+    case 'isoDepth':   blob = generateCurveHatches(state, buf, fieldIsoDepth);   break;
+    case 'projNormal': blob = generateCurveHatches(state, buf, fieldProjNormal); break;
+    case 'principal':  blob = generateCurveHatches(state, buf, fieldPrincipal);  break;
+    default:           blob = generateHatches(state, buf);                       break;
+  }
+  const groundLines = (state.groundStyle === 'waves')
+    ? generateGroundWaves(state, buf)
+    : generateGroundHatches(state, buf);
+  const groundShadow = generateGroundShadows(state, buf);
+  const ground = groundLines.concat(groundShadow);
+  let sky;
+  switch (state.skyStyle) {
+    case 'wobbly':        sky = generateCloudsWobbly(state, buf); break;
+    case 'multiGradient': sky = generateSkyMultiGradient(state, buf); break;
+    case 'paperGrain':    sky = generateSkyPaperGrain(state, buf); break;
+    case 'arcs':          sky = generateSkyArcs(state, buf); break;
+    case 'stars':         sky = generateStarSky(state, buf); break;
+    case 'cellular':      sky = generateSkyCellular(state, buf); break;
+    case 'none':          sky = []; break;
+    case 'splotchy':      sky = generateCloudsSplotchy(state, buf); break;
+    case 'clouds':        sky = generateSkyClouds(state, buf); break;
+    case 'cloudMask':     sky = generateCloudsMask(state, buf); break;
+    case 'cloudContour':  sky = generateCloudsContour(state, buf); break;
+    case 'cloudEngraved': sky = generateCloudsEngraved(state, buf); break;
+    default:              sky = generateSkyHatches(state, buf); break;
+  }
+  const rawPaths = blob.concat(ground).concat(sky);
+  addHorizonLine(rawPaths, buf);
+  const paths = optimizePaths(rawPaths);
+
+  let extraVB = [];
+  if (sceneResult && sceneResult.extraStrokes) {
+    const ctx = {
+      worldToScreen,
+      worldToVB: function (P) {
+        const s = worldToScreen(P);
+        return s ? [sxToVB(s[0]), syToVB(s[1])] : null;
+      },
+      sxToVB, syToVB, syHorizon: syHorizon
+    };
+    try { extraVB = sceneResult.extraStrokes(ctx, state) || []; }
+    catch (e) { console.warn('extraStrokes error', e); }
+  }
+  const labelPaths = buildBottomLabel(state, paths.length);
+  const d = buildPathD(paths, extraVB.concat(labelPaths));
+  const strokeVB = lwToStrokeVB(state.lw);
+  return {
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + VB_W + ' ' + VB_H + '">' +
+         '<rect width="' + VB_W + '" height="' + VB_H + '" fill="white"/>' +
+         '<path d="' + d + '" stroke="black" stroke-width="' + strokeVB.toFixed(3) +
+         '" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    paths: paths,
+    strokeCount: paths.length
+  };
+}
+
+// Expose to test pages loading us via iframe.
+window.renderToSvgString = renderToSvgString;
+window.defaultState = defaultState;
+window.SCENES = SCENES;
+
 async function doRender() {
   const btn = document.getElementById('render');
   btn.disabled = true;
   try {
     const state = readState();
+    // Bundle current scene params into state.sceneParams so the renderer
+    // sees them even when called from outside this page.
+    state.sceneParams = readSceneParams(state.scene) || {};
     writeUrl(state);
 
-    setStatus('Building blob SDF…');
-    await tick();
-    const rng = makeRng(state.seed);
-    // Scenes can return either a bare SDF function OR `{ sdf, camera }`
-    // where `camera` is the same options object that setupCamera() accepts.
-    // A scene-supplied camera overrides the UI camTilt for that render.
-    const sceneEntry = SCENES[state.scene] || SCENES.single;
-    let sceneResult;
-    if (typeof sceneEntry === 'function') {
-      sceneResult = sceneEntry(rng, state);
-    } else if (sceneEntry.ui === 'custom') {
-      // Custom-UI scenes (the builder) hold their own state and ignore
-      // the readSceneParams path.
-      sceneResult = sceneEntry.build(rng, state);
-    } else {
-      const params = readSceneParams(state.scene);
-      sceneResult = sceneEntry.build(rng, state, params);
-    }
-    let sdf, sceneCamera = null, sceneMaterialFn = null, sceneBeamMask = null;
-    if (typeof sceneResult === 'function') {
-      sdf = sceneResult;
-    } else {
-      sdf = sceneResult.sdf;
-      sceneCamera = sceneResult.camera || null;
-      sceneMaterialFn = sceneResult.materialFn || null;
-      sceneBeamMask = sceneResult.beamMask || null;
-    }
-    setupCamera(sceneCamera || { tiltDeg: state.camTilt });
-
-    setStatus('Raymarching scene buffer…');
+    setStatus('Rendering…');
     await tick();
     const t0 = performance.now();
-    const buf = renderSceneBuffer(state, sdf, sceneMaterialFn);
-    if (sceneBeamMask) applyBeamMask(buf, sceneBeamMask);
-    applyToneMap(buf, state);
+    const result = renderToSvgString(state);
     const t1 = performance.now();
-
-    setStatus('Generating hatches…');
-    await tick();
-    let blob;
-    switch (state.hatchStyle) {
-      case 'crosshatch': blob = generateCrosshatchHatches(state, buf);             break;
-      case 'vertical':   blob = generateVerticalHatches(state, buf);               break;
-      case 'cell':       blob = generateCellHatches(state, buf);                   break;
-      case 'monet':      blob = generateMonetHatches(state, buf);                  break;
-      case 'isoDepth':   blob = generateCurveHatches(state, buf, fieldIsoDepth);   break;
-      case 'projNormal': blob = generateCurveHatches(state, buf, fieldProjNormal); break;
-      case 'principal':  blob = generateCurveHatches(state, buf, fieldPrincipal);  break;
-      default:           blob = generateHatches(state, buf);                       break;
-    }
-    const groundLines = (state.groundStyle === 'waves')
-      ? generateGroundWaves(state, buf)
-      : generateGroundHatches(state, buf);
-    const groundShadow = generateGroundShadows(state, buf);
-    const ground = groundLines.concat(groundShadow);
-    let sky;
-    switch (state.skyStyle) {
-      case 'wobbly':        sky = generateCloudsWobbly(state, buf); break;
-      case 'multiGradient': sky = generateSkyMultiGradient(state, buf); break;
-      case 'paperGrain':    sky = generateSkyPaperGrain(state, buf); break;
-      case 'arcs':          sky = generateSkyArcs(state, buf); break;
-      case 'stars':         sky = generateStarSky(state, buf); break;
-      case 'cellular':      sky = generateSkyCellular(state, buf); break;
-      case 'none':          sky = []; break;
-      case 'splotchy':      sky = generateCloudsSplotchy(state, buf); break;
-      // The options below are hidden in the UI but still callable from URL
-      // params if you want to inspect them.
-      case 'clouds':       sky = generateSkyClouds(state, buf); break;
-      case 'cloudMask':    sky = generateCloudsMask(state, buf); break;
-      case 'cloudContour': sky = generateCloudsContour(state, buf); break;
-      case 'cloudEngraved':sky = generateCloudsEngraved(state, buf); break;
-      default:             sky = generateSkyHatches(state, buf); break;
-    }
-    const rawPaths = blob.concat(ground).concat(sky);
-    addHorizonLine(rawPaths, buf);
-    const t2 = performance.now();
-
-    setStatus('Optimizing pen travel…');
-    await tick();
-    const paths = optimizePaths(rawPaths);
-    const t3 = performance.now();
-
-    // Scene-supplied additive strokes (non-SDF overlays: light beams,
-    // beam fans, scattered stars, aurora ribbons, etc.). Called AFTER the
-    // camera is set up so the scene can use worldToScreen / worldToVB.
-    let extraVB = [];
-    if (sceneResult && sceneResult.extraStrokes) {
-      const ctx = {
-        worldToScreen,
-        worldToVB: function (P) {
-          const s = worldToScreen(P);
-          return s ? [sxToVB(s[0]), syToVB(s[1])] : null;
-        },
-        sxToVB, syToVB, syHorizon: syHorizon
-      };
-      try { extraVB = sceneResult.extraStrokes(ctx, state) || []; }
-      catch (e) { console.warn('extraStrokes error', e); }
-    }
-
-    const labelPaths = buildBottomLabel(state, paths.length);
-    const d = buildPathD(paths, extraVB.concat(labelPaths));
-    const strokeVB = lwToStrokeVB(state.lw);
-
     const svg = document.getElementById('preview');
     svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
     svg.style.width = '480px';
     svg.style.height = '600px';
-    svg.innerHTML =
-      '<rect width="' + VB_W + '" height="' + VB_H + '" fill="white"/>' +
-      '<path d="' + d + '" stroke="black" stroke-width="' + strokeVB.toFixed(3) +
-      '" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
-
-    lastRender = { state, paths, d, strokeVB };
-
+    svg.innerHTML = result.svg.replace(/^<svg[^>]*>|<\/svg>$/g, '');
+    lastRender = { state, paths: result.paths, d: '', strokeVB: lwToStrokeVB(state.lw) };
     setStatus(
-      paths.length + ' strokes\n' +
-      'buffer ' + Math.round(t1 - t0) + 'ms · hatch ' + Math.round(t2 - t1) +
-      'ms · opt ' + Math.round(t3 - t2) + 'ms\n' +
+      result.strokeCount + ' strokes · ' + Math.round(t1 - t0) + 'ms\n' +
       'lw=' + state.lw + 'mm  spacing=' + (state.lw * state.density).toFixed(2) + 'mm'
     );
   } catch (err) {
