@@ -161,6 +161,12 @@
     <div class="field"><label>Light Y</label><input id="ly" type="number" step="0.1" value="0.8"></div>
     <div class="field"><label>Light Z</label><input id="lz" type="number" step="0.1" value="-0.4"></div>
 
+    <h2>Tone</h2>
+    <div class="field"><label>Brightness</label><input id="brightness" type="number" min="-0.5" max="0.5" step="0.05" value="0"></div>
+    <div class="field"><label>Contrast</label><input id="contrast" type="number" min="0.5" max="2.0" step="0.05" value="1"></div>
+    <div class="field"><label>Gamma</label><input id="gamma" type="number" min="0.4" max="2.5" step="0.05" value="1"></div>
+    <div class="field"><label>Posterize</label><input id="posterLevels" type="number" min="1" max="8" step="1" value="1"></div>
+
     <div class="row" style="margin-top:10px">
       <button id="render">Render</button>
       <button id="randomize" class="secondary">Random</button>
@@ -2120,6 +2126,46 @@ function generateHatches(state, buf) {
 }
 
 // ============================================================
+// Tone mapping on buf.light. Applied after raymarching, before the hatcher
+// reads brightness for stroke-density decisions.
+//
+//   brightness:  uniform offset on the final brightness value
+//   contrast:    multiplicative scaling around 0.5
+//   gamma:       power curve (gamma > 1 deepens shadows)
+//   posterLevels: quantize the result into N discrete levels
+//                 (1 = no quantization)
+//
+// Only the blob surfaces (buf.surface === 1) are affected; sky and
+// ground keep their original light.
+// ============================================================
+function applyToneMap(buf, state) {
+  const b = state.brightness || 0;
+  const c = state.contrast != null ? state.contrast : 1;
+  const g = state.gamma != null ? state.gamma : 1;
+  const p = state.posterLevels != null ? state.posterLevels : 1;
+  const skipTransform = (b === 0 && c === 1 && g === 1);
+  const skipPoster = (p <= 1);
+  if (skipTransform && skipPoster) return;
+  for (let i = 0; i < buf.light.length; i++) {
+    if (buf.surface[i] !== 1) continue;
+    let v = buf.light[i];
+    if (!skipTransform) {
+      v = (v - 0.5) * c + 0.5 + b;
+      if (v < 0) v = 0; else if (v > 1) v = 1;
+      if (g !== 1) v = Math.pow(v, g);
+    }
+    if (!skipPoster) {
+      // Quantize into p discrete buckets: {0, 1/(p-1), 2/(p-1), ..., 1}.
+      // Use min(floor(v * p), p - 1) so v = 1.0 maps to the top bucket.
+      let bucket = Math.floor(v * p);
+      if (bucket >= p) bucket = p - 1;
+      v = bucket / (p - 1);
+    }
+    buf.light[i] = v;
+  }
+}
+
+// ============================================================
 // Curved hatching: trace evenly-spaced streamlines through a direction
 // field defined per buffer pixel. Three field flavours are available:
 //
@@ -3357,6 +3403,10 @@ function readState() {
     lx: clampFloat(document.getElementById('lx').value, -2, 2, -0.6),
     ly: clampFloat(document.getElementById('ly').value, -2, 2, 0.8),
     lz: clampFloat(document.getElementById('lz').value, -2, 2, -0.4),
+    brightness: clampFloat(document.getElementById('brightness').value, -0.5, 0.5, 0),
+    contrast: clampFloat(document.getElementById('contrast').value, 0.5, 2.0, 1),
+    gamma: clampFloat(document.getElementById('gamma').value, 0.4, 2.5, 1),
+    posterLevels: clampInt(document.getElementById('posterLevels').value, 1, 8, 1),
   };
 }
 function clampInt(v, lo, hi, fb) {
@@ -3374,6 +3424,7 @@ function syncFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const keys = ['seed','scene','lw','density','nSpheres','spread','verticality',
                 'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness',
+                'brightness','contrast','gamma','posterLevels',
                 'cloudThreshold','bufRes','lx','ly','lz'];
   for (const k of keys) {
     if (params.has(k)) document.getElementById(k).value = params.get(k);
@@ -3383,6 +3434,7 @@ function writeUrl(state) {
   const params = new URLSearchParams();
   for (const k of ['seed','scene','lw','density','nSpheres','spread','verticality',
                    'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness',
+                'brightness','contrast','gamma','posterLevels',
                    'cloudThreshold']) {
     params.set(k, state[k]);
   }
@@ -3423,6 +3475,7 @@ async function doRender() {
     await tick();
     const t0 = performance.now();
     const buf = renderSceneBuffer(state, sdf);
+    applyToneMap(buf, state);
     const t1 = performance.now();
 
     setStatus('Generating hatches…');
