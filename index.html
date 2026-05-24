@@ -123,6 +123,7 @@
               style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
         <option value="perspective" selected>Perspective</option>
         <option value="waves">Waves</option>
+        <option value="sandGarden">Sand garden</option>
       </select>
     </div>
     <div class="field"><label>Hatch style</label>
@@ -1093,25 +1094,50 @@ const SCENES = {
       return combined;
     }
   },
-  arch: function (rng, state) {
-    // Old arch (replaced below with octahedral version)
-    // Tall-ish rock with a tunnel carved front-to-back, just above the
-    // horizon — so the camera sees a circular hole through the rock with
-    // sky/water visible on the far side.
-    //
-    // The tunnel MUST be along Z (front-to-back). An X-axis tunnel runs
-    // perpendicular to the view direction and produces an internal cavity
-    // invisible from the front.
-    const base = makeBlobSDFAt(rng, {
-      center: [0, 0.05, 0],
-      nSpheres: 5,
-      smoothK: 0.35,
-      spread: 1.3,
-      verticality: 1.6,
-      pointiness: 0
-    });
-    const tunnel = makeCapsuleZ(0, 0.12, 0, 0.55, 0.22);
-    return sdfSubtract(base, [tunnel]);
+  arch: {
+    ui: [
+      { id: 'rockShards',      label: 'Rock shards',    type: 'int',    min: 4,    max: 12,   step: 1,    default: 7    },
+      { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.50, max: 2.50, step: 0.05, default: 1.10 },
+      { id: 'rockVerticality', label: 'Rock vert.',     type: 'number', min: 0.60, max: 2.50, step: 0.10, default: 1.40 },
+      { id: 'rockSpread',      label: 'Rock spread',    type: 'number', min: 0.40, max: 2.50, step: 0.05, default: 1.20 },
+      { id: 'rockSmoothK',     label: 'Rock smooth K',  type: 'number', min: 0.00, max: 0.20, step: 0.01, default: 0.04 },
+      { id: 'rockJaggedness',  label: 'Rock jaggedness',type: 'number', min: 0.00, max: 0.20, step: 0.005, default: 0.08 },
+      { id: 'rockRoundMix',    label: 'Round mix',      type: 'number', min: 0.00, max: 1.00, step: 0.05, default: 0.45 },
+      { id: 'archRadius',      label: 'Arch radius',    type: 'number', min: 0.15, max: 0.50, step: 0.02, default: 0.30 },
+      { id: 'archDepth',       label: 'Arch depth',     type: 'number', min: 0.30, max: 1.50, step: 0.05, default: 0.75 }
+    ],
+    build: function (rng, state, params) {
+      // Sea-arch / cave at the WATERLINE — the tunnel is carved at the
+      // ocean surface (y = GROUND_Y = -0.5) so only the upper half-
+      // circle of the opening shows above water. The mass is built
+      // from random-rotated octahedra + spheres exactly like the
+      // lighthouse rocks (rocky / weathered look, not a smooth blob).
+      let base = makeOctahedralBlobAt(rng, {
+        center: [0, 0.00, 0],
+        nSpheres: params.rockShards,
+        smoothK: params.rockSmoothK,
+        spread: params.rockSpread,
+        verticality: params.rockVerticality,
+        pointiness: 0.10,
+        scale: params.rockScale,
+        roundMix: params.rockRoundMix,
+        randomRotate: true
+      });
+      if (params.rockJaggedness > 0) {
+        const n3 = makeNoise3D(state.seed + ':archRock');
+        base = displace(base, function (x, y, z) {
+          return 0.50 * n3(x *  6, y *  6, z *  6) +
+                 0.30 * n3(x * 16, y * 16, z * 16) +
+                 0.20 * n3(x * 38, y * 38, z * 38);
+        }, params.rockJaggedness);
+      }
+      // Tunnel along z (front-to-back) so the camera sees through it.
+      // Centred at y = -0.50 (water line) so the bottom half of the
+      // circular opening is below the water and only the top half
+      // appears as a visible arch.
+      const tunnel = makeCapsuleZ(0, -0.50, 0, params.archDepth, params.archRadius);
+      return sdfSubtract(base, [tunnel]);
+    }
   },
   lighthouse: {
     ui: [
@@ -3776,6 +3802,99 @@ function generateCurveHatches(state, buf, fieldFn) {
 // but each scan line is displaced by 2-D noise (two octaves) so it
 // undulates. Wave amplitude tapers to zero at the horizon (perspective).
 // Driven by `state.waviness`.
+// Two-pass approximate Euclidean distance transform on the blob mask
+// (buf.surface === 1). Returns a Float32Array of distances in PIXEL
+// units; ground / sky pixels carry the distance to the nearest blob
+// pixel. Diagonal weight √2 ≈ 1.4142.
+function computeBlobDistanceTransform(buf) {
+  const W = buf.W, H = buf.H;
+  const dist = new Float32Array(W * H);
+  const big = 9999;
+  for (let i = 0; i < W * H; i++) {
+    dist[i] = (buf.surface[i] === 1) ? 0 : big;
+  }
+  const D = 1.4142;
+  // Forward pass — looks up + left.
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      let d = dist[i];
+      if (x > 0)              d = Math.min(d, dist[i - 1]    + 1);
+      if (y > 0)              d = Math.min(d, dist[i - W]    + 1);
+      if (x > 0 && y > 0)     d = Math.min(d, dist[i - W - 1] + D);
+      if (x < W - 1 && y > 0) d = Math.min(d, dist[i - W + 1] + D);
+      dist[i] = d;
+    }
+  }
+  // Backward pass — looks down + right.
+  for (let y = H - 1; y >= 0; y--) {
+    for (let x = W - 1; x >= 0; x--) {
+      const i = y * W + x;
+      let d = dist[i];
+      if (x < W - 1)                  d = Math.min(d, dist[i + 1]    + 1);
+      if (y < H - 1)                  d = Math.min(d, dist[i + W]    + 1);
+      if (x < W - 1 && y < H - 1)     d = Math.min(d, dist[i + W + 1] + D);
+      if (x > 0 && y < H - 1)         d = Math.min(d, dist[i + W - 1] + D);
+      dist[i] = d;
+    }
+  }
+  return dist;
+}
+
+// Zen sand-garden ground (karesansui) — inspired by Piter Pasma's URH
+// #420 "Sand Garden". Horizontal scan lines on the ground are displaced
+// vertically by cos(distFromBlob × freq), where distFromBlob is the
+// 2D screen-space distance from each ground pixel to the nearest blob
+// pixel. The ripple amplitude falls off exponentially with distance,
+// so it dies away into a quiet horizon. Reads as raked sand with
+// concentric ripples surrounding each rock — exactly the look of a
+// Japanese zen garden in plan.
+function generateGroundSandGarden(state, buf) {
+  const paths = [];
+  if (syHorizon <= SY_MIN) return paths;
+  const sampleStep = 0.004;
+  const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
+  const minDsy = Math.max(state.lw * WORLD_PER_MM * 2.0, 0.006);
+  const fullRange = syHorizon - SY_MIN;
+  const blobDist = computeBlobDistanceTransform(buf);
+  const pxPerScreen = (buf.W - 1) / (SX_MAX - SX_MIN);
+  // Ripple wavelength scales inversely with line spacing so the user
+  // can dial density and ripples track. Amplitude is a fraction of
+  // line spacing so adjacent ripple peaks stay near their own row.
+  const rippleAmp  = maxDsy * 0.65 * (state.waviness || 1);
+  const rippleFreq = 30;
+  const falloffRate = 3.0;
+  let sy = SY_MIN;
+  while (sy < syHorizon) {
+    const d = (syHorizon - sy) / fullRange;       // 1 at bottom → 0 at horizon
+    const step = minDsy + (maxDsy - minDsy) * d * d;
+    const ampHere = rippleAmp * (0.25 + 0.75 * d * d);
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      const idx = bufIdx(buf, sx, sy);
+      const distPx = (idx >= 0) ? blobDist[idx] : 9999;
+      const distScreen = distPx / pxPerScreen;
+      const falloff = Math.exp(-distScreen * falloffRate);
+      const ripple = Math.cos(distScreen * rippleFreq) * ampHere * falloff;
+      const wavySy = sy + ripple;
+      const idx2 = bufIdx(buf, sx, wavySy);
+      const onGround = (idx2 >= 0 && buf.surface[idx2] === 2);
+      if (onGround) {
+        polyline.push([sx, wavySy]);
+      } else {
+        flush();
+      }
+    }
+    flush();
+    sy += step;
+  }
+  return paths;
+}
+
 function generateGroundWaves(state, buf) {
   const paths = [];
   const sampleStep = 0.005;
@@ -5043,9 +5162,12 @@ function renderToSvgString(state) {
     case 'principal':  blob = generateCurveHatches(state, buf, fieldPrincipal);  break;
     default:           blob = generateHatches(state, buf);                       break;
   }
-  const groundLines = (state.groundStyle === 'waves')
-    ? generateGroundWaves(state, buf)
-    : generateGroundHatches(state, buf);
+  let groundLines;
+  switch (state.groundStyle) {
+    case 'waves':      groundLines = generateGroundWaves(state, buf); break;
+    case 'sandGarden': groundLines = generateGroundSandGarden(state, buf); break;
+    default:           groundLines = generateGroundHatches(state, buf); break;
+  }
   const groundShadow = generateGroundShadows(state, buf);
   const ground = groundLines.concat(groundShadow);
   let sky;
