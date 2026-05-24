@@ -4000,45 +4000,64 @@ function bufPxToScreen(buf, px, py) {
   return [sx, sy];
 }
 
-function fieldIsoDepth(buf, ix, iy) {
+// Sample a Float32 buffer with a 3x3 box blur centred at (ix, iy),
+// skipping pixels where mask is not 1. Returns 0 if no valid samples.
+function sampleSmooth(buf, src, ix, iy) {
   const W = buf.W, H = buf.H;
-  if (ix <= 0 || ix >= W - 1 || iy <= 0 || iy >= H - 1) return null;
-  const i = iy * W + ix;
-  if (buf.surface[i] !== 1) return null;
-  const dxR = (buf.surface[i + 1]   === 1) ? buf.depth[i + 1]   : buf.depth[i];
-  const dxL = (buf.surface[i - 1]   === 1) ? buf.depth[i - 1]   : buf.depth[i];
-  const dyD = (buf.surface[i + W]   === 1) ? buf.depth[i + W]   : buf.depth[i];
-  const dyU = (buf.surface[i - W]   === 1) ? buf.depth[i - W]   : buf.depth[i];
-  const gx = (dxR - dxL) * 0.5;
-  const gy = (dyD - dyU) * 0.5;
-  const mag = Math.hypot(gx, gy);
+  let sum = 0, count = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    const y = iy + dy;
+    if (y < 0 || y >= H) continue;
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = ix + dx;
+      if (x < 0 || x >= W) continue;
+      const j = y * W + x;
+      if (buf.surface[j] === 1) { sum += src[j]; count++; }
+    }
+  }
+  return count > 0 ? sum / count : src[iy * W + ix];
+}
+
+// Wide-stencil gradient — central difference over R pixels each side,
+// smoothed by a 3x3 box around each sample point. Much more stable
+// than 1-pixel central diff on noisy SDF/light buffers.
+function gradient(buf, src, ix, iy, R) {
+  const W = buf.W, H = buf.H;
+  if (ix < R || ix >= W - R || iy < R || iy >= H - R) return null;
+  if (buf.surface[iy * W + ix] !== 1) return null;
+  const dR = sampleSmooth(buf, src, ix + R, iy);
+  const dL = sampleSmooth(buf, src, ix - R, iy);
+  const dD = sampleSmooth(buf, src, ix, iy + R);
+  const dU = sampleSmooth(buf, src, ix, iy - R);
+  return [(dR - dL) / (2 * R), (dD - dU) / (2 * R)];
+}
+
+function fieldIsoDepth(buf, ix, iy) {
+  const g = gradient(buf, buf.depth, ix, iy, 3);
+  if (!g) return null;
+  const mag = Math.hypot(g[0], g[1]);
   if (mag < 1e-6) return [1, 0];
-  return [-gy / mag, gx / mag];
+  return [-g[1] / mag, g[0] / mag];
 }
 
 function fieldProjNormal(buf, ix, iy) {
   const i = iy * buf.W + ix;
   if (buf.surface[i] !== 1) return null;
-  const nx = buf.nx[i], ny = buf.ny[i];
-  const mag = Math.hypot(nx, ny);
+  // Box-blur the projected normal over a 3x3 neighbourhood so the
+  // streamline direction is smoother than the raw per-pixel normal.
+  const nxAvg = sampleSmooth(buf, buf.nx, ix, iy);
+  const nyAvg = sampleSmooth(buf, buf.ny, ix, iy);
+  const mag = Math.hypot(nxAvg, nyAvg);
   if (mag < 1e-4) return [1, 0];
-  return [-ny / mag, nx / mag];
+  return [-nyAvg / mag, nxAvg / mag];
 }
 
 function fieldPrincipal(buf, ix, iy) {
-  const W = buf.W, H = buf.H;
-  if (ix <= 0 || ix >= W - 1 || iy <= 0 || iy >= H - 1) return null;
-  const i = iy * W + ix;
-  if (buf.surface[i] !== 1) return null;
-  const dxR = (buf.surface[i + 1]   === 1) ? buf.light[i + 1]   : buf.light[i];
-  const dxL = (buf.surface[i - 1]   === 1) ? buf.light[i - 1]   : buf.light[i];
-  const dyD = (buf.surface[i + W]   === 1) ? buf.light[i + W]   : buf.light[i];
-  const dyU = (buf.surface[i - W]   === 1) ? buf.light[i - W]   : buf.light[i];
-  const gx = (dxR - dxL) * 0.5;
-  const gy = (dyD - dyU) * 0.5;
-  const mag = Math.hypot(gx, gy);
+  const g = gradient(buf, buf.light, ix, iy, 3);
+  if (!g) return null;
+  const mag = Math.hypot(g[0], g[1]);
   if (mag < 1e-6) return [1, 0];
-  return [-gy / mag, gx / mag];
+  return [-g[1] / mag, g[0] / mag];
 }
 
 function generateCurveHatches(state, buf, fieldFn) {
