@@ -4750,15 +4750,24 @@ function generateStarSky(state, buf) {
     if (idx >= 0 && buf.surface[idx] !== 0) continue;       // skip if blob in front
     const size = 0.005 + rng() * 0.011;
     const kind = rng();
-    if (kind < 0.55) {
+    if (kind < 0.48) {
       // Plus-cross — most common star
       paths.push([[sx - size, sy], [sx + size, sy]]);
       paths.push([[sx, sy - size], [sx, sy + size]]);
-    } else if (kind < 0.88) {
+    } else if (kind < 0.78) {
       // Dim point — single short dash
       paths.push([[sx - size * 0.35, sy], [sx + size * 0.35, sy]]);
+    } else if (kind < 0.92) {
+      // 3-line asterisk (typographic *): three line segments through
+      // the centre, 60° apart. Vertical + 30° + 150° orientation gives
+      // a clean star with a hint of vertical alignment.
+      const a3 = [Math.PI / 2, Math.PI / 6, 5 * Math.PI / 6];
+      for (const a of a3) {
+        const c = Math.cos(a), s = Math.sin(a);
+        paths.push([[sx - c * size, sy - s * size], [sx + c * size, sy + s * size]]);
+      }
     } else {
-      // Bright star — asterisk (cross + diagonal)
+      // Bright star — full 4-line asterisk (cross + both diagonals).
       paths.push([[sx - size, sy], [sx + size, sy]]);
       paths.push([[sx, sy - size], [sx, sy + size]]);
       const d = size * 0.7;
