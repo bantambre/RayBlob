@@ -1870,71 +1870,134 @@ const SCENES = {
       };
     }
   },
-  cathedralInterior: function (rng, state) {
-    // Receding rows of columns flanking a central nave, plus a back wall
-    // far ahead — Cathedral interior viewed from just inside the entrance.
-    //
-    // The camera sits at z=0 looking down +z; rows of pillars stretch from
-    // z=0.6 back to z=3.2, converging to the back wall at z=3.6.
-    const parts = [];
-    for (let i = 0; i < 6; i++) {
-      const z = 0.7 + i * 0.45;
-      parts.push(makeCylinderY(-0.40, -0.45, 0.55, z, 0.045));
-      parts.push(makeCylinderY( 0.40, -0.45, 0.55, z, 0.045));
-    }
-    // Back wall (well in front of the camera, perpendicular to the nave).
-    parts.push(makeBox(0, 0.05, 3.6, 0.55, 0.55, 0.05, 0.020));
-    // Tall arched window carved out of the back wall.
-    parts.push(makeCapsuleZ(0, 0.05, 3.6, 0.3, 0.20));
-    // Floor strip down the nave.
-    parts.push(makeBox(0, -0.50, 2.0, 0.45, 0.02, 1.4, 0.010));
-    // Subtract the arched window from the back wall.
-    const wall = makeBox(0, 0.05, 3.6, 0.55, 0.55, 0.05, 0.020);
-    const arch = makeCapsuleZ(0, -0.15, 3.6, 0.3, 0.20);
-    const wallWithArch = sdfSubtract(wall, [arch]);
-    // Rebuild parts cleanly: pillars + floor + walled-with-arch back.
-    const pillars = [];
-    for (let i = 0; i < 6; i++) {
-      const z = 0.7 + i * 0.45;
-      pillars.push(makeCylinderY(-0.40, -0.45, 0.55, z, 0.045));
-      pillars.push(makeCylinderY( 0.40, -0.45, 0.55, z, 0.045));
-    }
-    const floor = makeBox(0, -0.50, 2.0, 0.45, 0.02, 1.4, 0.010);
-    return {
-      sdf: sdfUnion([...pillars, floor, wallWithArch], 0),
-      camera: { tiltDeg: 3, focal: 3.0 }
-    };
-  },
-  mengerSponge: function (rng, state) {
-    // Menger sponge level 1: 3x3x3 grid of unit cubes with the seven
-    // "center" cubes removed (body center + 6 face centers). A cube
-    // is removed if at least two of its three index coordinates are 1.
-    //
-    // Sponge is anchored so its BOTTOM sits roughly at the horizon
-    // (y = -0.5) — same compositional level as the other scenes — and
-    // camTilt matches the default (6°) so the horizon line lines up
-    // with the rest of the gallery.
-    const parts = [];
-    const half = 0.12;
-    const step = 0.24;
-    // y centres: -0.18, 0.06, 0.30 → cube y-extents −0.30..+0.42.
-    // Bottom of the sponge sits 0.20 above the horizon, comfortably
-    // above the foreground.
-    for (let ix = 0; ix < 3; ix++) {
-      for (let iy = 0; iy < 3; iy++) {
-        for (let iz = 0; iz < 3; iz++) {
-          const centerCount = (ix === 1 ? 1 : 0) + (iy === 1 ? 1 : 0) + (iz === 1 ? 1 : 0);
-          if (centerCount >= 2) continue;
-          parts.push(makeBox(
-            -step + ix * step,
-            -0.18 + iy * step,
-            -step + iz * step,
-            half, half, half, 0.006
-          ));
+  cathedralInterior: {
+    ui: [
+      { id: 'pillarCount',  label: 'Pillars/side',  type: 'int',    min: 4,    max: 10,   step: 1,    default: 8    },
+      { id: 'pillarHeight', label: 'Pillar height', type: 'number', min: 0.70, max: 1.40, step: 0.05, default: 1.05 },
+      { id: 'pillarRadius', label: 'Pillar radius', type: 'number', min: 0.035, max: 0.080, step: 0.005, default: 0.055 },
+      { id: 'naveWidth',    label: 'Nave width',    type: 'number', min: 0.30, max: 0.55, step: 0.02, default: 0.40 },
+      { id: 'capitals',     label: 'Capitals',      type: 'enum',
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' },
+      { id: 'lightBeam',    label: 'Light beam',    type: 'enum',
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' },
+      { id: 'beamSide',     label: 'Beam side',     type: 'enum',
+        options: [{ value: 'left', label: 'left' }, { value: 'right', label: 'right' }], default: 'right' },
+      { id: 'altar',        label: 'Altar',         type: 'enum',
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' }
+    ],
+    build: function (rng, state, params) {
+      // Cathedral interior with majesty — taller pillars, optional Roman
+      // capitals (flared tops), a beam of light slanting down from a
+      // high clerestory window via the beamMask infrastructure (the
+      // sky generators carve a wedge of empty space), and an altar
+      // at the back of the nave for a focal point.
+      const parts = [];
+      const N = params.pillarCount;
+      const PH = params.pillarHeight;
+      const naveW = params.naveWidth;
+      const pillarBottomY = -0.45;
+      const pillarTopY = pillarBottomY + PH;
+      const rad = params.pillarRadius;
+      for (let i = 0; i < N; i++) {
+        const z = 0.7 + i * 0.40;
+        parts.push(makeCylinderY(-naveW, pillarBottomY, pillarTopY, z, rad));
+        parts.push(makeCylinderY( naveW, pillarBottomY, pillarTopY, z, rad));
+        // Capital — wider, flatter cap on each pillar.
+        if (params.capitals === 'yes') {
+          parts.push(makeBox(-naveW, pillarTopY + 0.025, z, rad * 1.8, 0.025, rad * 1.8, 0.005));
+          parts.push(makeBox( naveW, pillarTopY + 0.025, z, rad * 1.8, 0.025, rad * 1.8, 0.005));
         }
       }
+      // Floor strip down the nave.
+      parts.push(makeBox(0, -0.50, 1.8, naveW * 0.95, 0.02, 1.4, 0.010));
+      // Back wall with arched window carved out.
+      const wallZ = 0.7 + N * 0.40 + 0.30;
+      const wall = makeBox(0, 0.05, wallZ, naveW + 0.18, PH * 0.55, 0.05, 0.020);
+      const arch = makeCapsuleZ(0, -0.15, wallZ, 0.3, 0.18);
+      parts.push(sdfSubtract(wall, [arch]));
+      // Altar — small box at the foot of the back wall.
+      if (params.altar === 'yes') {
+        parts.push(makeBox(0, -0.42, wallZ - 0.35, 0.12, 0.08, 0.07, 0.012));
+        // Tall cross/candlestick above the altar.
+        parts.push(makeCylinderY(0, -0.34, -0.10, wallZ - 0.35, 0.008));
+        parts.push(makeBox(0, -0.13, wallZ - 0.35, 0.05, 0.008, 0.008, 0.002));
+      }
+      const result = {
+        sdf: sdfUnion(parts, 0),
+        camera: { tiltDeg: 3, focal: 3.0 }
+      };
+      // Light beam from a clerestory window — slanting down from high
+      // up on one side. The beam carves a wedge of empty space out of
+      // the sky pixels (which inside a cathedral happen to mostly be
+      // the empty regions between/behind pillars).
+      if (params.lightBeam === 'yes') {
+        const side = params.beamSide === 'left' ? -1 : 1;
+        const beamZ = 0.7 + (N * 0.40) * 0.5;  // midway down the nave
+        result.beamMask = {
+          apex: [side * (naveW + 0.18), 0.55, beamZ],
+          dirSx: -side * 0.55, dirSy: -1.0,
+          halfAngleDeg: 7
+        };
+      }
+      return result;
     }
-    return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 6, yawDeg: 28 } };
+  },
+  mengerSponge: {
+    ui: [
+      { id: 'cubeSize',  label: 'Cube size',   type: 'number', min: 0.08, max: 0.20, step: 0.01, default: 0.13 },
+      { id: 'pedestal',  label: 'Pedestal',    type: 'enum',
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' },
+      { id: 'noise',     label: 'Surface noise', type: 'number', min: 0.000, max: 0.030, step: 0.002, default: 0.008 },
+      { id: 'yawDeg',    label: 'Cam yaw (°)', type: 'number', min: 0,    max: 45,   step: 1,    default: 28   }
+    ],
+    build: function (rng, state, params) {
+      // Menger sponge level 1: 3x3x3 grid of unit cubes with the seven
+      // "centre" cubes removed (body centre + 6 face centres). Cube
+      // is dropped if ≥2 of its three index coordinates are 1.
+      //
+      // Sits on an optional two-tier stone pedestal (museum sculpture
+      // composition) and gets a subtle 3-D noise displacement so the
+      // cubes don't read as perfectly geometric — just enough surface
+      // weathering to give them character without losing the fractal
+      // structure.
+      const half = params.cubeSize;
+      const step = half * 2;
+      const cubes = [];
+      for (let ix = 0; ix < 3; ix++) {
+        for (let iy = 0; iy < 3; iy++) {
+          for (let iz = 0; iz < 3; iz++) {
+            const centerCount = (ix === 1 ? 1 : 0) + (iy === 1 ? 1 : 0) + (iz === 1 ? 1 : 0);
+            if (centerCount >= 2) continue;
+            cubes.push(makeBox(
+              -step + ix * step,
+              -0.06 + iy * step,
+              -step + iz * step,
+              half, half, half, 0.006
+            ));
+          }
+        }
+      }
+      let menger = sdfUnion(cubes, 0);
+      if (params.noise > 0) {
+        const n3 = makeNoise3D(state.seed + ':mengerNoise');
+        menger = displace(menger, function (x, y, z) {
+          return 0.55 * n3(x * 14, y * 14, z * 14) +
+                 0.30 * n3(x * 30, y * 30, z * 30) +
+                 0.15 * n3(x * 60, y * 60, z * 60);
+        }, params.noise);
+      }
+      const all = [menger];
+      if (params.pedestal === 'yes') {
+        // Upper plinth (closer to the sponge).
+        all.push(makeBox(0, -0.40, 0, step * 1.8, 0.05, step * 1.8, 0.012));
+        // Wider lower plinth (sits on the ground).
+        all.push(makeBox(0, -0.48, 0, step * 2.2, 0.06, step * 2.2, 0.015));
+      }
+      return {
+        sdf: sdfUnion(all, 0),
+        camera: { tiltDeg: 6, yawDeg: params.yawDeg }
+      };
+    }
   },
   mobius: function (rng, state) {
     // 32 thin flat band segments around a loop, each rotated around its
@@ -2854,15 +2917,20 @@ const SCENES = {
       // small antenna nub on top + rim notches for portholes.
       const sz = params.saucerSize;
       const cy = params.saucerY;
-      // Lower disc — flatter and wider.
-      const disc1 = box2D(0, cy - 0.005, sz * 1.00, sz * 0.06, sz * 0.04);
-      // Upper disc — slightly narrower, smoother edge.
-      const disc2 = box2D(0, cy + 0.035, sz * 0.72, sz * 0.04, sz * 0.03);
-      // Central dome.
-      const dome  = circle2D(0, cy + 0.075, sz * 0.30);
-      // Small antenna stub.
-      const ant   = box2D(0, cy + 0.075 + sz * 0.32, sz * 0.04, sz * 0.06, 0.005);
-      const profile = sdfUnion([disc1, disc2, dome, ant], 0.025);
+      // Refined classic-flying-saucer profile in (r, y) plane:
+      //   - Wide lower rim (sharp circular edge)
+      //   - Curved disc body tapering inward from the rim
+      //   - Rim ring of small bulges (suggests porthole lights)
+      //   - Central dome
+      //   - Antenna stub + tip bead
+      // Built from layered 2D primitives, then revolved around Y.
+      const rim     = circle2D(sz * 0.92, cy + 0.00, sz * 0.07);   // outer rim torus-cross-section
+      const disc    = box2D(0, cy + 0.005, sz * 0.65, sz * 0.045, sz * 0.030);
+      const dome    = circle2D(0, cy + 0.075, sz * 0.32);
+      const domeBase= box2D(0, cy + 0.045, sz * 0.36, sz * 0.020, sz * 0.020);
+      const antRod  = box2D(0, cy + 0.075 + sz * 0.42, sz * 0.014, sz * 0.10, 0.004);
+      const antTip  = circle2D(0, cy + 0.075 + sz * 0.55, sz * 0.025);
+      const profile = sdfUnion([rim, disc, dome, domeBase, antRod, antTip], 0.022);
       let saucer = revolveY(profile);
       // Optional landscape below.
       let combined = saucer;
@@ -2902,19 +2970,20 @@ const SCENES = {
   },
   recursiveTower: {
     ui: [
-      { id: 'tiers',     label: 'Tiers',        type: 'int',    min: 3,    max: 9,    step: 1,    default: 6    },
-      { id: 'baseWidth', label: 'Base width',   type: 'number', min: 0.30, max: 0.80, step: 0.02, default: 0.55 },
-      { id: 'tierTaper', label: 'Tier taper',   type: 'number', min: 0.70, max: 0.95, step: 0.01, default: 0.84 },
-      { id: 'tierHeight',label: 'Tier height',  type: 'number', min: 0.10, max: 0.30, step: 0.01, default: 0.18 },
-      { id: 'eaveOverhang', label: 'Eave size', type: 'number', min: 0.00, max: 0.20, step: 0.01, default: 0.09 },
-      { id: 'rim',       label: 'Rim ledge',    type: 'enum',
-        options: [{value:'yes',label:'yes'},{value:'no',label:'no'}], default: 'yes' }
+      { id: 'tiers',        label: 'Tiers',        type: 'int',    min: 3,    max: 9,    step: 1,    default: 6    },
+      { id: 'baseWidth',    label: 'Base width',   type: 'number', min: 0.30, max: 0.80, step: 0.02, default: 0.55 },
+      { id: 'tierTaper',    label: 'Tier taper',   type: 'number', min: 0.70, max: 0.95, step: 0.01, default: 0.84 },
+      { id: 'tierHeight',   label: 'Tier height',  type: 'number', min: 0.10, max: 0.30, step: 0.01, default: 0.18 },
+      { id: 'roofOverhang', label: 'Roof size',    type: 'number', min: 0.00, max: 0.25, step: 0.01, default: 0.11 },
+      { id: 'roofPitch',    label: 'Roof pitch',   type: 'number', min: 0.20, max: 1.00, step: 0.05, default: 0.55 },
+      { id: 'spireHeight',  label: 'Spire height', type: 'number', min: 0.05, max: 0.50, step: 0.02, default: 0.20 }
     ],
     build: function (rng, state, params) {
-      // Pagoda-style multi-tier tower. Each tier is a square body box
-      // with a wider flat eave on top (the overhanging pagoda roof
-      // edge). Tiers shrink by `tierTaper` and stack so the whole tower
-      // takes up most of the frame height.
+      // Pagoda-style multi-tier tower. Each tier = square body box +
+      // SLOPED pyramidal roof on top (makePyramidSquare). The pyramidal
+      // roof gives the characteristic pagoda silhouette — overhanging
+      // upturned roof edges — instead of the flat boxy eaves that
+      // looked too modernist before.
       const parts = [];
       const n = params.tiers;
       const groundY = -0.70;
@@ -2923,25 +2992,22 @@ const SCENES = {
       for (let i = 0; i < n; i++) {
         const halfW = params.baseWidth * sc;
         const halfH = params.tierHeight * sc * 0.55;
-        const eaveHalfW = halfW + params.eaveOverhang * sc;
-        const eaveHalfH = halfH * 0.10;
-        // Body box of this tier.
+        const eaveHalfW = halfW + params.roofOverhang * sc;
+        const roofH = halfH * 1.6 * params.roofPitch;
+        // Body box.
         parts.push(makeBox(0, y + halfH, 0, halfW, halfH, halfW, 0.010));
-        // Eave (the wider, flatter top edge of the tier).
-        const eaveCenterY = y + 2 * halfH + eaveHalfH;
-        parts.push(makeBox(0, eaveCenterY, 0, eaveHalfW, eaveHalfH, eaveHalfW, 0.008));
-        // Rim ledge — a thinner box just below the eave.
-        if (params.rim === 'yes') {
-          parts.push(makeBox(0, y + 2 * halfH - eaveHalfH * 0.4, 0,
-                             halfW + params.eaveOverhang * sc * 0.4,
-                             eaveHalfH * 0.5,
-                             halfW + params.eaveOverhang * sc * 0.4, 0.005));
-        }
-        y = eaveCenterY + eaveHalfH;
+        // Square pyramidal roof — wide base = eave overhang, pointed top.
+        const roofBaseY = y + 2 * halfH;
+        const roofPeakY = roofBaseY + roofH;
+        parts.push(makePyramidSquare(0, roofBaseY, 0, eaveHalfW, roofH));
+        y = roofPeakY;
         sc *= params.tierTaper;
       }
-      // Spire on top.
-      parts.push(makeConeY(0, y + 0.18 * sc, y, 0, params.baseWidth * sc * 0.45));
+      // Slender finial spire on the topmost peak.
+      if (params.spireHeight > 0) {
+        parts.push(makeConeY(0, y + params.spireHeight * sc, y, 0,
+                             params.baseWidth * sc * 0.30));
+      }
       return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 5, yawDeg: 18 } };
     }
   },
@@ -2961,7 +3027,8 @@ const SCENES = {
           { value: 'flat',   label: 'flat'   },
           { value: 'arches', label: 'arches' }
         ], default: 'flat' },
-      { id: 'brokenChance', label: 'Broken %',       type: 'number', min: 0.00, max: 0.60, step: 0.05, default: 0.20 }
+      { id: 'brokenChance', label: 'Broken %',       type: 'number', min: 0.00, max: 0.60, step: 0.05, default: 0.20 },
+      { id: 'fluting',      label: 'Fluting',        type: 'number', min: 0.00, max: 0.015, step: 0.001, default: 0.005 }
     ],
     build: function (rng, state, params) {
       // Solomonic colonnade — temple-scale, with optional connecting
@@ -2999,6 +3066,17 @@ const SCENES = {
         const w = params.columnWidth;
         const slab = makeBox(0, h, 0, w * 1.5, h, w * 0.55);
         let col = twistY(slab, twist);
+        // Fluting — sinusoidal grooves carved into the column surface
+        // via displace(). Because the column is twisted, the grooves
+        // run helically (spiral) along its length — exactly what real
+        // Solomonic columns have.
+        if (params.fluting > 0) {
+          col = displace(col, function (x, y, z) {
+            // Sample a high-frequency sinusoid in xz; gets warped by
+            // the twist applied above, producing a spiral.
+            return 0.5 + 0.5 * Math.sin(Math.atan2(z, x) * 8 + y * 6);
+          }, params.fluting);
+        }
         const parts = [col];
         if (hasBase) {
           const baseExtent = w * 1.8;
