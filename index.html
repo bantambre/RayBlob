@@ -48,6 +48,7 @@
         <option value="single" selected>Single blob</option>
         <option value="builder">Scene builder</option>
         <option value="monoliths">Monoliths</option>
+        <option value="stonehenge">Stonehenge</option>
         <option value="arch">Cave arch</option>
         <option value="lighthouse">Lighthouse</option>
         <option value="cairn">Cairn</option>
@@ -150,6 +151,7 @@
         <option value="cellular">Cellular automata</option>
         <option value="constellation">Constellation</option>
         <option value="rain">Rain</option>
+        <option value="vertical">Vertical scan</option>
         <option value="none">None (empty sky)</option>
       </select>
     </div>
@@ -1094,6 +1096,79 @@ const SCENES = {
         }, params.roughness);
       }
       return combined;
+    }
+  },
+  stonehenge: {
+    ui: [
+      { id: 'trilithonCount', label: 'Trilithons',     type: 'int',    min: 3,    max: 8,    step: 1,    default: 5    },
+      { id: 'ringRadius',     label: 'Ring radius',    type: 'number', min: 0.50, max: 1.40, step: 0.05, default: 0.85 },
+      { id: 'arcSpan',        label: 'Arc span',       type: 'number', min: 0.40, max: 1.00, step: 0.05, default: 0.75 },
+      { id: 'stoneHeight',    label: 'Stone height',   type: 'number', min: 0.30, max: 1.00, step: 0.05, default: 0.55 },
+      { id: 'stoneWidth',     label: 'Stone width',    type: 'number', min: 0.05, max: 0.15, step: 0.01, default: 0.09 },
+      { id: 'fallenStones',   label: 'Fallen stones',  type: 'int',    min: 0,    max: 8,    step: 1,    default: 3    },
+      { id: 'roughness',      label: 'Roughness',      type: 'number', min: 0.00, max: 0.10, step: 0.005, default: 0.025 }
+    ],
+    build: function (rng, state, params) {
+      // Inspired by Piter Pasma's Universal Rayhatcher #437 — a Stonehenge
+      // arrangement of trilithons (two uprights + horizontal lintel),
+      // distributed along an arc of the ground, with scattered fallen
+      // stones in the foreground. Pair with skyStyle = 'vertical' for the
+      // URH #437 look.
+      const N = params.trilithonCount;
+      const parts = [];
+      const groundY = -0.5;
+      const w = params.stoneWidth;
+      const h = params.stoneHeight;
+      const halfArc = Math.PI * params.arcSpan;
+      const arcStart = -halfArc + Math.PI / 2;
+      const r = params.ringRadius;
+      const flatten = 0.55; // foreshorten z so the ring reads as elliptical
+      const sep = w * 4;    // distance between two uprights of one trilithon
+      for (let i = 0; i < N; i++) {
+        const t = N <= 1 ? 0.5 : i / (N - 1);
+        const angle = arcStart + t * (halfArc * 2);
+        const cx = Math.cos(angle) * r;
+        const cz = Math.sin(angle) * r * flatten - 0.05;
+        // The two uprights of a trilithon are arranged tangent to the ring.
+        const tangent = [Math.sin(angle), 0, -Math.cos(angle) * flatten];
+        const heightHere = h * (0.92 + (i * 7919 % 100) / 600); // mild variation
+        for (const side of [-1, 1]) {
+          const ux = cx + tangent[0] * (sep / 2) * side;
+          const uz = cz + tangent[2] * (sep / 2) * side;
+          let upright = makeBox(0, heightHere, 0, w, heightHere, w * 0.75, 0.012);
+          upright = rotateY(upright, angle);
+          parts.push(translate(upright, ux, groundY, uz));
+        }
+        // Lintel: thick horizontal slab spanning the two uprights.
+        const lintelH = w * 0.55;
+        let lintel = makeBox(0, heightHere * 2 + lintelH, 0,
+                             sep / 2 + w, lintelH, w * 0.75, 0.012);
+        lintel = rotateY(lintel, angle);
+        parts.push(translate(lintel, cx, groundY, cz));
+      }
+      // Fallen / scattered stones in the foreground for narrative weight.
+      for (let i = 0; i < params.fallenStones; i++) {
+        const a = rng() * Math.PI * 2;
+        const fr = r * (1.05 + rng() * 0.45);
+        const fx = Math.cos(a) * fr;
+        const fz = Math.sin(a) * fr * flatten - 0.30;
+        const fw = w * (0.55 + rng() * 0.65);
+        const fh = fw * (0.4 + rng() * 0.5);
+        let stone = makeBox(0, fh, 0, fw, fh, fw * 0.85, 0.012);
+        stone = rotateY(stone, rng() * Math.PI * 2);
+        stone = rotateZ(stone, (rng() - 0.5) * 0.50);
+        parts.push(translate(stone, fx, groundY, fz));
+      }
+      let scene = sdfUnion(parts, 0);
+      if (params.roughness > 0) {
+        const n3 = makeNoise3D(state.seed + ':stonehengeNoise');
+        scene = displace(scene, function (x, y, z) {
+          return 0.55 * n3(x *  5, y *  5, z *  5) +
+                 0.30 * n3(x * 14, y * 14, z * 14) +
+                 0.15 * n3(x * 32, y * 32, z * 32);
+        }, params.roughness);
+      }
+      return { sdf: scene, camera: { tiltDeg: 14, yawDeg: 0 } };
     }
   },
   arch: {
@@ -5213,6 +5288,38 @@ function generateSkyConstellation(state, buf) {
   return paths;
 }
 
+// Vertical-scan sky — parallel vertical scan lines covering the sky
+// region. Replicates the URH #437 background: uniform vertical hatch
+// that strongly contrasts with horizontal-line foregrounds. Stroke
+// density follows the global lw × density spacing.
+function generateSkyVertical(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const spacing = Math.max(0.003, state.lw * state.density * WORLD_PER_MM * 1.1);
+  const sampleStep = Math.max(0.0015, spacing * 0.25);
+  for (let sx = SX_MIN; sx <= SX_MAX; sx += spacing) {
+    let inDraw = false;
+    let sy0 = 0, lastY = 0;
+    for (let sy = syHorizon; sy <= SY_MAX; sy += sampleStep) {
+      const idx = bufIdx(buf, sx, sy);
+      const isSky = (idx >= 0 && buf.surface[idx] === 0);
+      if (isSky) {
+        if (!inDraw) { sy0 = sy; inDraw = true; }
+        lastY = sy;
+      } else if (inDraw) {
+        if (Math.abs(lastY - sy0) > spacing * 0.4) {
+          paths.push([[sx, sy0], [sx, lastY]]);
+        }
+        inDraw = false;
+      }
+    }
+    if (inDraw && Math.abs(lastY - sy0) > spacing * 0.4) {
+      paths.push([[sx, sy0], [sx, lastY]]);
+    }
+  }
+  return paths;
+}
+
 // Rain sky — many short slanted dashes scattered uniformly across the
 // sky region, all at the same angle. Reads as falling rain / steep
 // drizzle. Distinct from the existing sky-style options because most
@@ -6358,6 +6465,7 @@ function renderToSvgString(state) {
     case 'cellular':      sky = generateSkyCellular(state, buf); break;
     case 'constellation': sky = generateSkyConstellation(state, buf); break;
     case 'rain':          sky = generateSkyRain(state, buf); break;
+    case 'vertical':      sky = generateSkyVertical(state, buf); break;
     case 'none':          sky = []; break;
     case 'splotchy':      sky = generateCloudsSplotchy(state, buf); break;
     case 'clouds':        sky = generateSkyClouds(state, buf); break;
