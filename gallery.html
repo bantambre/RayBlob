@@ -82,7 +82,7 @@ const MATRICES = {
 
   sky: function () {
     const styles = ['gradient', 'wobbly', 'multiGradient', 'paperGrain',
-                    'arcs', 'stars', 'cellular', 'none'];
+                    'arcs', 'stars', 'cellular', 'constellation', 'rain', 'none'];
     return styles.map(function (s) {
       return {
         title: 'sky · ' + s,
@@ -109,32 +109,52 @@ const MATRICES = {
     // Recently overhauled / new scenes at sensible default pairings so
     // they each show their best face.
     return [
+      { title: 'forest (conifer + hero tree)',
+        state: { scene: 'forest', skyStyle: 'gradient' } },
+      { title: 'forest (winter + hero)',
+        state: { scene: 'forest', skyStyle: 'gradient',
+                 sceneParams: { style: 'winter', treeCount: 22,
+                                heroTree: 'yes', heroScale: 2.20 } } },
+      { title: 'volcano (fluid smoke + cam yaw)',
+        state: { scene: 'volcano', skyStyle: 'gradient' } },
+      { title: 'mountains (snow line + foreground tree)',
+        state: { scene: 'mountains', skyStyle: 'gradient' } },
+      { title: 'tornado (debris + flying)',
+        state: { scene: 'tornado', skyStyle: 'wobbly' } },
+      { title: 'astronaut (helmet portrait)',
+        state: { scene: 'astronaut', skyStyle: 'stars',
+                 groundStyle: 'perspective' } },
+      { title: 'cathedral (light beam + altar)',
+        state: { scene: 'cathedralInterior' } },
+      { title: 'menger sponge (pedestal)',
+        state: { scene: 'mengerSponge', skyStyle: 'gradient' } },
+      { title: 'recursiveTower → pagoda',
+        state: { scene: 'recursiveTower', skyStyle: 'gradient' } },
+      { title: 'colonnade (broken + arches + fluting)',
+        state: { scene: 'twistedColumn', skyStyle: 'gradient',
+                 sceneParams: { lintel: 'arches', brokenChance: 0.30,
+                                fluting: 0.008 } } },
+      { title: 'ufo (over dunes + neg beam)',
+        state: { scene: 'ufo', skyStyle: 'stars' } },
       { title: 'arch (sea-arch at waterline)',
         state: { scene: 'arch', groundStyle: 'waves', skyStyle: 'gradient' } },
       { title: 'pyramid (long sun shadow)',
         state: { scene: 'pyramid', lx: -0.95, ly: 0.35, lz: -0.10,
                  skyStyle: 'gradient', groundStyle: 'perspective' } },
-      { title: 'twistedColumn → Solomonic colonnade',
-        state: { scene: 'twistedColumn', skyStyle: 'gradient' } },
       { title: 'monoliths (Stones of Stenness)',
-        state: { scene: 'monoliths', skyStyle: 'gradient',
-                 groundStyle: 'perspective' } },
+        state: { scene: 'monoliths', skyStyle: 'gradient' } },
       { title: 'monoliths · sand garden',
         state: { scene: 'monoliths', skyStyle: 'gradient',
-                 groundStyle: 'sandGarden', waviness: 3 } },
+                 groundStyle: 'sandGarden', waviness: 3, rippleFreq: 10 } },
       { title: 'cairn (rocky / weathered)',
         state: { scene: 'cairn', skyStyle: 'gradient' } },
       { title: 'cairn · sand garden',
         state: { scene: 'cairn', skyStyle: 'gradient',
-                 groundStyle: 'sandGarden', waviness: 2.5 } },
-      { title: 'iceberg (water-line material, variable shape)',
+                 groundStyle: 'sandGarden', waviness: 2.5, rippleFreq: 12 } },
+      { title: 'iceberg (companion + dense underwater)',
         state: { scene: 'iceberg', groundStyle: 'waves', skyStyle: 'gradient' } },
       { title: 'lighthouse (rocks + dome beam)',
-        state: { scene: 'lighthouse', groundStyle: 'waves', skyStyle: 'stars' } },
-      { title: 'cairn · pyramidal tall stack',
-        state: { scene: 'cairn',
-                 sceneParams: { stacks: 7, taper: 0.30, baseScale: 0.40,
-                                roundMix: 0.65, jaggedness: 0.10 } } }
+        state: { scene: 'lighthouse', groundStyle: 'waves', skyStyle: 'stars' } }
     ];
   },
 

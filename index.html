@@ -148,6 +148,7 @@
         <option value="stars">Stars</option>
         <option value="cellular">Cellular automata</option>
         <option value="constellation">Constellation</option>
+        <option value="rain">Rain</option>
         <option value="none">None (empty sky)</option>
       </select>
     </div>
@@ -5102,6 +5103,34 @@ function generateSkyConstellation(state, buf) {
   return paths;
 }
 
+// Rain sky — many short slanted dashes scattered uniformly across the
+// sky region, all at the same angle. Reads as falling rain / steep
+// drizzle. Distinct from the existing sky-style options because most
+// of them are horizontal (gradient, wobbly, bands) or radial (arcs,
+// stars) — this is the only one with a consistent diagonal motion.
+function generateSkyRain(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const rng = makeRng(state.seed + ':rain');
+  const angleDeg = 78;
+  const a = angleDeg * Math.PI / 180;
+  const dx = Math.cos(a), dy = Math.sin(a);
+  // Density scales with line spacing so denser hatching gives denser rain.
+  const targetCount = Math.round(8000 * (0.30 / state.lw));
+  for (let i = 0; i < targetCount; i++) {
+    const sx = SX_MIN + rng() * (SX_MAX - SX_MIN);
+    const sy = syHorizon + 0.005 + rng() * (SY_MAX - syHorizon - 0.005);
+    const idx = bufIdx(buf, sx, sy);
+    if (idx < 0 || buf.surface[idx] !== 0) continue;
+    const len = 0.018 + rng() * 0.020;
+    paths.push([
+      [sx - dx * len * 0.5, sy + dy * len * 0.5],
+      [sx + dx * len * 0.5, sy - dy * len * 0.5]
+    ]);
+  }
+  return paths;
+}
+
 function generateSkyHatches(state, buf) {
   const paths = [];
   const ang = Math.PI / 4;
@@ -6217,6 +6246,7 @@ function renderToSvgString(state) {
     case 'stars':         sky = generateStarSky(state, buf); break;
     case 'cellular':      sky = generateSkyCellular(state, buf); break;
     case 'constellation': sky = generateSkyConstellation(state, buf); break;
+    case 'rain':          sky = generateSkyRain(state, buf); break;
     case 'none':          sky = []; break;
     case 'splotchy':      sky = generateCloudsSplotchy(state, buf); break;
     case 'clouds':        sky = generateSkyClouds(state, buf); break;
