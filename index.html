@@ -2193,17 +2193,75 @@ const SCENES = {
     // Single octahedron viewed off-axis so all three diamond faces are visible.
     return { sdf: makeOctahedron(0, 0.15, 0, 0.32), camera: { tiltDeg: 14, yawDeg: 22 } };
   },
-  astronaut: function (rng, state) {
-    // Tiny planet: large sphere centred well below the frame so only
-    // its top crown shows. Small figure standing on top.
-    const planet = makeSphere(0, -1.00, 0, 0.95);
-    const legs = makeCylinderY(0, -0.05, 0.05, 0, 0.040);
-    const torso = makeSphere(0, 0.07, 0, 0.050);
-    const helmet = makeSphere(0, 0.13, 0, 0.045);
-    return {
-      sdf: sdfUnion([planet, legs, torso, helmet], 0.012),
-      camera: { tiltDeg: 14 }
-    };
+  astronaut: {
+    ui: [
+      { id: 'helmetSize',  label: 'Helmet size',     type: 'number', min: 0.55, max: 1.10, step: 0.05, default: 0.80 },
+      { id: 'helmetY',     label: 'Helmet height',   type: 'number', min: 0.00, max: 0.50, step: 0.02, default: 0.18 },
+      { id: 'visor',       label: 'Visor highlight', type: 'enum',
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' },
+      { id: 'antenna',     label: 'Antenna',         type: 'enum',
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' },
+      { id: 'backpack',    label: 'Backpack',        type: 'enum',
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' }
+    ],
+    build: function (rng, state, params) {
+      // Close-up helmet-shoulder portrait. Helmet is a big sphere
+      // dominating the upper frame; shoulders + backpack + chest pack
+      // peek in from the bottom. Visor highlight is rendered via
+      // materialFn (id 6 = very bright/sparse) on the front face of
+      // the helmet so the visor reads as a bright reflective patch
+      // without requiring an extra SDF.
+      const HR = params.helmetSize;
+      const HY = params.helmetY;
+      const parts = [];
+      // Main helmet sphere.
+      parts.push(makeSphere(0, HY, 0, HR));
+      // Comms 'ears' on each side — small bumps at helmet equator.
+      parts.push(makeSphere(-HR * 0.88, HY + HR * 0.08, 0, HR * 0.18));
+      parts.push(makeSphere( HR * 0.88, HY + HR * 0.08, 0, HR * 0.18));
+      // Helmet collar / neck ring — short wider cylinder at helmet base.
+      parts.push(makeCylinderY(0, HY - HR - 0.10, HY - HR + 0.05, 0, HR * 0.72));
+      // Shoulders — wide chunky box; chops the frame bottom.
+      parts.push(makeBox(0, HY - HR - 0.42, 0,
+                         HR * 1.55, 0.28, HR * 0.62, 0.06));
+      // Chest pack — small front box on the chest plate.
+      parts.push(makeBox(0, HY - HR - 0.30, -HR * 0.50,
+                         HR * 0.34, HR * 0.20, HR * 0.10, 0.025));
+      // Antenna stub on top of the helmet.
+      if (params.antenna === 'yes') {
+        parts.push(makeCylinderY(HR * 0.35,
+                                  HY + HR - 0.02, HY + HR + 0.20, 0,
+                                  HR * 0.020));
+        parts.push(makeSphere(HR * 0.35, HY + HR + 0.21, 0, HR * 0.04));
+      }
+      // Backpack peeking above shoulders behind the helmet.
+      if (params.backpack === 'yes') {
+        parts.push(makeBox(0, HY - HR + 0.04, HR * 0.55,
+                           HR * 0.78, HR * 0.55, HR * 0.10, 0.04));
+      }
+      const sdf = sdfUnion(parts, 0.04);
+      const result = {
+        sdf: sdf,
+        camera: { tiltDeg: 0, distance: 4.0 }
+      };
+      if (params.visor === 'yes') {
+        // Visor ellipsoid on the FRONT of the helmet. Materials 6 marks
+        // a very-sparse (very bright) zone — the hatcher leaves it
+        // nearly empty so the visor reads as a strong highlight.
+        const vCx = 0, vCy = HY + HR * 0.10, vCz = -HR * 0.92;
+        const rx = HR * 0.55, ry = HR * 0.40, rz = HR * 0.30;
+        result.materialFn = function (x, y, z) {
+          // Only the front face of the helmet can be the visor.
+          if (z > -HR * 0.35) return 0;
+          const dx = (x - vCx) / rx;
+          const dy = (y - vCy) / ry;
+          const dz = (z - vCz) / rz;
+          if (dx * dx + dy * dy + dz * dz < 1.0) return 6;
+          return 0;
+        };
+      }
+      return result;
+    }
   },
   engineBlock: function (rng, state) {
     // V-style engine block silhouette: chunky main block + two valve
