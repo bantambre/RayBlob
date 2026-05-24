@@ -151,6 +151,7 @@
       </select>
     </div>
     <div class="field"><label>Waviness</label><input id="waviness" type="number" min="0" max="8" step="0.25" value="3.0"></div>
+    <div class="field"><label>Ripple freq</label><input id="rippleFreq" type="number" min="2" max="30" step="0.5" value="7.0"></div>
     <div class="field" style="display:none"><label>Cloud threshold</label><input id="cloudThreshold" type="number" min="0.3" max="0.8" step="0.025" value="0.5"></div>
 
     <h2>Pasma Hatching</h2>
@@ -4644,16 +4645,16 @@ function computeBlobDistanceTransform(buf) {
 // down to the ground plane. Used as the ripple-ring anchor for the sand
 // garden so the rings wrap around where the blob actually MEETS the
 // ground in 3D, not where it lands on the 2D screen.
-function blobGroundCentroid(buf) {
-  // Average the WORLD (x, z) coordinates of the actual blob hit points
-  // (using buf.depth, the per-pixel hit distance), not where the rays
-  // would land on the ground past the blob. The old version projected
-  // each blob pixel's ray downward to the ground plane, but blob pixels
-  // sit ABOVE the horizon — their rays go upward — so most samples were
-  // skipped and the few that remained projected far behind the blob.
+function blobGroundAnchor(buf) {
+  // Two-pass: first compute the world (x, z) centroid of the blob's
+  // hit points, then compute the average and max distance from that
+  // centroid in the xz plane. The MEAN distance is used as the
+  // 'ground radius' — the typical horizontal extent of the blob
+  // footprint — so that the sand-garden ripples can start at the
+  // object's edge (anchor + r) instead of inside it.
   const W = buf.W, H = buf.H;
-  let cxSum = 0, czSum = 0, cnt = 0;
   const stride = 4;
+  const positions = [];
   for (let py = 0; py < H; py += stride) {
     for (let px = 0; px < W; px += stride) {
       const idx = py * W + px;
@@ -4663,25 +4664,35 @@ function blobGroundCentroid(buf) {
       const sx = SX_MIN + (px / (W - 1)) * (SX_MAX - SX_MIN);
       const sy = SY_MAX - (py / (H - 1)) * (SY_MAX - SY_MIN);
       const r = castRay(sx, sy);
-      cxSum += CAM[0] + r[0] * t;
-      czSum += CAM[2] + r[2] * t;
-      cnt++;
+      positions.push([CAM[0] + r[0] * t, CAM[2] + r[2] * t]);
     }
   }
-  return cnt > 0 ? [cxSum / cnt, czSum / cnt] : [0, 0];
+  if (positions.length === 0) return { cx: 0, cz: 0, radius: 0 };
+  let cx = 0, cz = 0;
+  for (const p of positions) { cx += p[0]; cz += p[1]; }
+  cx /= positions.length;
+  cz /= positions.length;
+  let sumDist = 0;
+  for (const p of positions) {
+    const dx = p[0] - cx, dz = p[1] - cz;
+    sumDist += Math.sqrt(dx * dx + dz * dz);
+  }
+  const meanDist = sumDist / positions.length;
+  return { cx: cx, cz: cz, radius: meanDist };
 }
 
 // Sand-garden displacement at world ground position (worldX, worldZ).
-// Concentric rings around the precomputed centroid, in WORLD units —
-// so the rings get foreshortened (smaller in screen) at distance, like
-// a real raked-sand pattern viewed in perspective.
-function sandGardenRipple(worldX, worldZ, anchorX, anchorZ, amp) {
-  const dx = worldX - anchorX, dz = worldZ - anchorZ;
+// Rings start at the anchor's RADIUS (the blob's mean footprint extent)
+// so the first ripple peak coincides with where the object meets the
+// sand, and waves only exist OUTSIDE the silhouette.
+function sandGardenRipple(worldX, worldZ, anchor, freq, amp) {
+  const dx = worldX - anchor.cx, dz = worldZ - anchor.cz;
   const worldDist = Math.sqrt(dx * dx + dz * dz);
-  const worldFreq = 7.0;
-  const fadeRate = 1.5;
-  const falloff = Math.exp(-worldDist * fadeRate);
-  return Math.cos(worldDist * worldFreq) * amp * falloff;
+  // Distance from the object's edge — clamp at 0 inside the radius.
+  const distFromEdge = Math.max(0, worldDist - anchor.radius);
+  const fadeRate = 1.2;
+  const falloff = Math.exp(-distFromEdge * fadeRate);
+  return Math.cos(distFromEdge * freq) * amp * falloff;
 }
 
 function generateGroundSandGarden(state, buf) {
@@ -4691,11 +4702,12 @@ function generateGroundSandGarden(state, buf) {
   const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
   const minDsy = Math.max(state.lw * WORLD_PER_MM * 2.0, 0.006);
   const fullRange = syHorizon - SY_MIN;
-  // World-space ring anchor — where the blob touches the ground.
-  const centroid = blobGroundCentroid(buf);
-  const anchorX = centroid[0], anchorZ = centroid[1];
+  // World-space ring anchor — where the blob touches the ground, with
+  // a radius equal to the blob's mean horizontal extent.
+  const anchor = blobGroundAnchor(buf);
   // Amplitude scales with line spacing so peaks stay near their own row.
   const rippleAmp = maxDsy * 1.10 * (state.waviness || 1);
+  const rippleFreq = state.rippleFreq != null ? state.rippleFreq : 7.0;
   let sy = SY_MIN;
   while (sy < syHorizon) {
     const d = (syHorizon - sy) / fullRange;       // 1 at bottom → 0 at horizon
@@ -4714,7 +4726,7 @@ function generateGroundSandGarden(state, buf) {
       if (tg <= 0) { flush(); continue; }
       const worldX = CAM[0] + r[0] * tg;
       const worldZ = CAM[2] + r[2] * tg;
-      const ripple = sandGardenRipple(worldX, worldZ, anchorX, anchorZ, rippleAmp);
+      const ripple = sandGardenRipple(worldX, worldZ, anchor, rippleFreq, rippleAmp);
       const wavySy = sy + ripple;
       const idx2 = bufIdx(buf, sx, wavySy);
       const onGround = (idx2 >= 0 && buf.surface[idx2] === 2);
@@ -4802,7 +4814,8 @@ function generateGroundShadows(state, buf) {
   const useSandGarden = (state.groundStyle === 'sandGarden');
   const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
   const rippleAmp = useSandGarden ? maxDsy * 1.10 * (state.waviness || 1) : 0;
-  const centroid = useSandGarden ? blobGroundCentroid(buf) : [0, 0];
+  const rippleFreq = state.rippleFreq != null ? state.rippleFreq : 7.0;
+  const anchor = useSandGarden ? blobGroundAnchor(buf) : { cx: 0, cz: 0, radius: 0 };
   for (let sy = SY_MIN + 0.01; sy < syHorizon - 0.005; sy += yStep) {
     for (let sx = SX_MIN + 0.01; sx <= SX_MAX - 0.01; sx += xStep) {
       const idx = bufIdx(buf, sx, sy);
@@ -4818,7 +4831,7 @@ function generateGroundShadows(state, buf) {
           if (tg > 0) {
             const worldX = CAM[0] + r[0] * tg;
             const worldZ = CAM[2] + r[2] * tg;
-            drawSy = sy + sandGardenRipple(worldX, worldZ, centroid[0], centroid[1], rippleAmp);
+            drawSy = sy + sandGardenRipple(worldX, worldZ, anchor, rippleFreq, rippleAmp);
           }
         }
       }
@@ -5819,6 +5832,7 @@ function readState() {
     skyStyle: document.getElementById('skyStyle').value,
     groundStyle: document.getElementById('groundStyle').value,
     waviness: clampFloat(document.getElementById('waviness').value, 0, 8, 3.0),
+    rippleFreq: clampFloat(getInputValue('rippleFreq', 7.0), 1, 40, 7.0),
     cloudThreshold: clampFloat(document.getElementById('cloudThreshold').value, 0.3, 0.8, 0.5),
     lw: clampFloat(document.getElementById('lw').value, 0.05, 2.0, 0.3),
     density: clampFloat(document.getElementById('density').value, 1.2, 8, 2.5),
@@ -5926,7 +5940,7 @@ function syncFromUrl() {
     renderSceneUi(urlScene);
   }
   const keys = ['seed','scene','lw','density','nSpheres','spread','verticality',
-                'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness',
+                'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness','rippleFreq',
                 'brightness','contrast','gamma','posterLevels',
                 'cloudThreshold','bufRes','lx','ly','lz'];
   for (const k of keys) {
@@ -5937,7 +5951,7 @@ function syncFromUrl() {
 function writeUrl(state) {
   const params = new URLSearchParams();
   for (const k of ['seed','scene','lw','density','nSpheres','spread','verticality',
-                   'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness',
+                   'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness','rippleFreq',
                 'brightness','contrast','gamma','posterLevels',
                    'cloudThreshold']) {
     if (state[k] != null) params.set(k, state[k]);
@@ -5962,7 +5976,7 @@ function defaultState() {
     nSpheres: 4, spread: 1.0, verticality: 1.4, pointiness: 0, smoothK: 0.3,
     camTilt: 6,
     hatchStyle: 'scan', skyStyle: 'gradient', groundStyle: 'perspective',
-    waviness: 3.0, cloudThreshold: 0.5,
+    waviness: 3.0, rippleFreq: 7.0, cloudThreshold: 0.5,
     lw: 0.3, density: 2.5, bufRes: 400,
     lx: -0.6, ly: 0.8, lz: -0.4,
     brightness: 0, contrast: 1, gamma: 1, posterLevels: 1
