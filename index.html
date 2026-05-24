@@ -1369,14 +1369,33 @@ const SCENES = {
       camera: { tiltDeg: 9 }
     };
   },
-  pyramid: function (rng, state) {
-    // Square-base pyramid, apex straight up. 3/4 view (camera yawed 25°)
-    // so two faces are visible at different lighting — otherwise from
-    // dead-on it reads as a flat triangle silhouette.
-    return {
-      sdf: makePyramidSquare(0, -0.7, 0, 0.7, 1.45),
-      camera: { tiltDeg: 9, yawDeg: 25 }
-    };
+  pyramid: {
+    ui: [
+      { id: 'halfSide',     label: 'Base half-side', type: 'number', min: 0.30, max: 1.20, step: 0.05, default: 0.70 },
+      { id: 'height',       label: 'Height',         type: 'number', min: 0.80, max: 2.20, step: 0.05, default: 1.45 },
+      { id: 'yawDeg',       label: 'Yaw (°)',        type: 'number', min: 0,    max: 45,   step: 1,    default: 25   },
+      { id: 'tiltDeg',      label: 'Cam tilt (°)',   type: 'number', min: 0,    max: 20,   step: 0.5,  default: 9    },
+      { id: 'jaggedness',   label: 'Surface noise',  type: 'number', min: 0.00, max: 0.10, step: 0.005, default: 0.015 }
+    ],
+    build: function (rng, state, params) {
+      // Square-base pyramid viewed 3/4. The shadow upgrade (soft shadow
+      // + AO + extended maxT) gives this scene its drama — set the
+      // Light X / Y / Z sliders to e.g. (-0.9, 0.4, 0.2) for a low-sun
+      // angle that casts a long shadow across the ground.
+      let p = makePyramidSquare(0, -0.7, 0, params.halfSide, params.height);
+      if (params.jaggedness > 0) {
+        const n3 = makeNoise3D(state.seed + ':pyramidNoise');
+        p = displace(p, function (x, y, z) {
+          return 0.55 * n3(x *  9, y *  9, z *  9) +
+                 0.30 * n3(x * 22, y * 22, z * 22) +
+                 0.15 * n3(x * 48, y * 48, z * 48);
+        }, params.jaggedness);
+      }
+      return {
+        sdf: p,
+        camera: { tiltDeg: params.tiltDeg, yawDeg: params.yawDeg }
+      };
+    }
   },
   iceberg: {
     ui: [
@@ -2340,15 +2359,56 @@ const SCENES = {
     }, 7, 0);
     return { sdf: tower, camera: { tiltDeg: 5, yawDeg: 14 } };
   },
-  twistedColumn: function (rng, state) {
-    // Tall slab bent into a helix by twistY. Demonstrates the new
-    // operator; pairs well with the basket-weave-style hatching on the
-    // resulting curved surface.
-    const slab = makeBox(0, 0, 0, 0.42, 0.85, 0.16);
-    return {
-      sdf: twistY(slab, 2.6),
-      camera: { tiltDeg: 6, yawDeg: 18 }
-    };
+  twistedColumn: {
+    ui: [
+      { id: 'columnCount',  label: 'Columns',        type: 'int',    min: 2,    max: 7,    step: 1,    default: 4    },
+      { id: 'twistAmount',  label: 'Twist',          type: 'number', min: 0.50, max: 6.00, step: 0.10, default: 3.20 },
+      { id: 'twistVariety', label: 'Twist variety',  type: 'number', min: 0.00, max: 0.60, step: 0.05, default: 0.20 },
+      { id: 'columnHeight', label: 'Column height',  type: 'number', min: 0.40, max: 1.20, step: 0.05, default: 0.85 },
+      { id: 'columnWidth',  label: 'Column width',   type: 'number', min: 0.06, max: 0.22, step: 0.01, default: 0.11 },
+      { id: 'spacing',      label: 'Spacing',        type: 'number', min: 0.18, max: 0.50, step: 0.02, default: 0.30 },
+      { id: 'pedestal',     label: 'Pedestal',       type: 'enum',
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' }
+    ],
+    build: function (rng, state, params) {
+      // Solomonic colonnade — multiple twisted columns side-by-side,
+      // each with its own twist amount, height variation, and optional
+      // square pedestal + capital. Evokes Bernini's baroque columns or
+      // an ancient temple. Each column is built at origin (bottom at
+      // y = 0) then translated to its lateral position.
+      const cols = [];
+      const n = params.columnCount;
+      const centerOffset = -(n - 1) / 2 * params.spacing;
+      const groundY = -0.5;
+      const baseHalfH = 0.035;
+      const hasBase = params.pedestal === 'yes';
+      for (let i = 0; i < n; i++) {
+        const cx = centerOffset + i * params.spacing;
+        const twist = params.twistAmount *
+                      (1 + (rng() - 0.5) * 2 * params.twistVariety);
+        const h = params.columnHeight * (0.95 + rng() * 0.10);
+        const w = params.columnWidth;
+        // Slab centred at y=h so its bottom is at y=0; twistY rotates
+        // around the y axis based on local y. The result has bottom at
+        // y=0 and top at y=2h.
+        const slab = makeBox(0, h, 0, w * 1.5, h, w * 0.55);
+        let col = twistY(slab, twist);
+        const parts = [col];
+        if (hasBase) {
+          const baseExtent = w * 1.7;
+          parts.push(makeBox(0, -baseHalfH, 0, baseExtent, baseHalfH, baseExtent, 0.01));
+          parts.push(makeBox(0, 2 * h + baseHalfH, 0, baseExtent, baseHalfH, baseExtent, 0.01));
+        }
+        let assembly = sdfUnion(parts, 0.02);
+        const liftY = groundY + (hasBase ? 2 * baseHalfH : 0);
+        assembly = translate(assembly, cx, liftY, 0);
+        cols.push(assembly);
+      }
+      return {
+        sdf: sdfUnion(cols, 0),
+        camera: { tiltDeg: 6, yawDeg: 12 }
+      };
+    }
   }
 };
 
@@ -2911,15 +2971,46 @@ function rayMarch(sdf, ox, oy, oz, dx, dy, dz, tMax) {
 
 // Cast a shadow ray from a near-surface point toward the light direction L.
 // Returns 1 if another SDF surface blocks the ray before maxT, else 0.
-function isShadowed(sdf, x, y, z, L, maxT) {
+// Soft shadow with penumbra. Returns 0..1 where 1 = fully shadowed and
+// 0 = fully lit. Inigo Quilez's "soft shadow" technique: at each marching
+// step track min(k*d/t) along the ray; small values of d (close to a
+// surface) at large t (far from origin) produce a soft falloff.
+//
+// `k` controls penumbra hardness — higher k = sharper edge. maxT extends
+// the ray's reach so we get the LONG cast shadows you see in URH-style
+// landscapes when the sun is low.
+function softShadow(sdf, x, y, z, L, maxT, k) {
+  let res = 1.0;
   let t = 0.008;
   for (let i = 0; i < 48; i++) {
     const d = sdf(x + L[0] * t, y + L[1] * t, z + L[2] * t);
-    if (d < 0.001) return 1;
+    if (d < 0.001) return 1;          // hard occlusion
+    const r = k * d / t;
+    if (r < res) res = r;
     t += Math.max(d, 0.006);
-    if (t > maxT) return 0;
+    if (t > maxT) break;
   }
-  return 0;
+  if (res < 0) res = 0;
+  if (res > 1) res = 1;
+  return 1 - res;                     // invert: 1 = shadowed
+}
+
+// Ambient occlusion: short rays along the surface normal sampled at
+// progressive distances. Inward corners and creases see less open space
+// and read darker. Returns 0..1 where 1 = fully exposed.
+function ambientOcclusion(sdf, x, y, z, nx, ny, nz) {
+  let occ = 0.0;
+  let weight = 1.0;
+  for (let i = 1; i <= 5; i++) {
+    const d = 0.025 * i;
+    const sample = sdf(x + nx * d, y + ny * d, z + nz * d);
+    occ += weight * (d - sample);
+    weight *= 0.65;
+  }
+  let v = 1 - 3.0 * occ;
+  if (v < 0) v = 0;
+  if (v > 1) v = 1;
+  return v;
 }
 function normalAt(sdf, x, y, z) {
   const e = 0.0009;
@@ -2957,7 +3048,8 @@ function renderSceneBuffer(state, sdf, materialFn) {
     light: new Float32Array(N),
     depth: new Float32Array(N),
     primary: new Uint8Array(N),
-    shadow: new Uint8Array(N),   // 1 if occluded from the light source
+    shadow: new Float32Array(N), // 0..1, 1 = fully shadowed (soft shadows)
+    ao: new Float32Array(N),     // 0..1, 1 = fully exposed (1.0 by default)
     material: new Uint8Array(N)  // 0=default; scenes may set 1..255 per pixel
   };
 
@@ -3003,20 +3095,24 @@ function renderSceneBuffer(state, sdf, materialFn) {
         buf.material[idx] = (m >= 0 && m <= 255) ? (m | 0) : 0;
       }
 
-      // Shadow ray. For blobs, offset along the surface normal. For ground,
-      // the surface normal is (0, 1, 0) so we offset slightly upward.
-      // Skip when ld <= 0 (back-facing surface, already self-shadowed).
+      // Soft shadow ray + AO. For blobs, offset along the surface normal.
+      // For ground, the surface normal is (0, 1, 0) so we offset slightly
+      // upward. AO defaults to 1 (fully exposed); we compute it for blob
+      // hits where creases / pockets matter.
+      buf.ao[idx] = 1;
       if (ld > 0) {
         if (hit === 1) {
           const hx = CAM[0] + dx * t + n[0] * 0.004;
           const hy = CAM[1] + dy * t + n[1] * 0.004;
           const hz = CAM[2] + dz * t + n[2] * 0.004;
-          buf.shadow[idx] = isShadowed(sdf, hx, hy, hz, L, 8);
+          // maxT 25 + penumbra factor 24 → long soft cast shadows.
+          buf.shadow[idx] = softShadow(sdf, hx, hy, hz, L, 25, 24);
+          buf.ao[idx] = ambientOcclusion(sdf, hx, hy, hz, n[0], n[1], n[2]);
         } else if (hit === 2) {
           const gx = CAM[0] + dx * t;
           const gy = GROUND_Y + 0.005;
           const gz = CAM[2] + dz * t;
-          buf.shadow[idx] = isShadowed(sdf, gx, gy, gz, L, 8);
+          buf.shadow[idx] = softShadow(sdf, gx, gy, gz, L, 25, 24);
         }
       }
 
@@ -3066,7 +3162,8 @@ function shouldDrawAt(buf, sx, sy, angleIdx) {
   // sparser hatching per region — see MATERIAL_PROPS).
   const offset = (angleIdx - pri + 4) % 4;
   let darkness = 1 - buf.light[idx];
-  if (buf.shadow[idx]) darkness = Math.min(1, darkness + 0.35);
+  // Soft shadow penumbra + AO contribution to per-pixel darkness.
+  darkness = Math.min(1, darkness + 0.55 * buf.shadow[idx] + 0.25 * (1 - buf.ao[idx]));
   darkness = Math.max(0, Math.min(1, darkness + materialDarknessShift(buf, idx)));
   const T = [0, 0.30, 0.55, 0.78];
   return darkness > T[offset];
@@ -3162,7 +3259,7 @@ function generateCellHatches(state, buf) {
           const idx = bufIdx(buf, sx, sy);
           if (idx >= 0 && buf.surface[idx] === 1) {
             let v = buf.light[idx] - materialDarknessShift(buf, idx);
-            if (buf.shadow[idx]) v -= 0.30;
+            v -= 0.45 * buf.shadow[idx] + 0.20 * (1 - buf.ao[idx]);
             total += Math.max(0, Math.min(1, v));
             count++;
           }
@@ -3226,7 +3323,8 @@ function generateMonetHatches(state, buf) {
       if (idx < 0 || buf.surface[idx] !== 1) continue;
       const darkness = Math.min(1, Math.max(0,
         (1 - buf.light[idx]) +
-        (buf.shadow[idx] ? 0.30 : 0) +
+        0.50 * buf.shadow[idx] +
+        0.20 * (1 - buf.ao[idx]) +
         materialDarknessShift(buf, idx)
       ));
       // Probability of placing a stroke ∝ darkness. The 1.4 multiplier
@@ -3292,7 +3390,8 @@ function generateCrosshatchHatches(state, buf) {
           const idx = bufIdx(buf, sx, sy);
           if (idx >= 0 && buf.surface[idx] === 1) {
             const darkness = (1 - buf.light[idx]) +
-                             (buf.shadow[idx] ? 0.30 : 0) +
+                             0.50 * buf.shadow[idx] +
+                             0.20 * (1 - buf.ao[idx]) +
                              materialDarknessShift(buf, idx);
             draw = (a === 0) ? true : (darkness > crossThreshold);
           }
@@ -3599,7 +3698,7 @@ function generateCurveHatches(state, buf, fieldFn) {
       if (ix < 0 || ix >= W || iy < 0 || iy >= H) return false;
       if (buf.surface[iy * W + ix] !== 1) return false;
       const i = iy * W + ix;
-      const dark = (1 - buf.light[i]) + (buf.shadow[i] ? 0.30 : 0) + materialDarknessShift(buf, i);
+      const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] + 0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
       if (dark < darkThreshold) return false;
       const r = spacingPx;
       const x0 = Math.max(0, ix - r), x1 = Math.min(W - 1, ix + r);
@@ -3623,7 +3722,7 @@ function generateCurveHatches(state, buf, fieldFn) {
         if (ix < 0 || ix >= W || iy < 0 || iy >= H) break;
         if (buf.surface[iy * W + ix] !== 1) break;
         const i = iy * W + ix;
-        const dark = (1 - buf.light[i]) + (buf.shadow[i] ? 0.30 : 0) + materialDarknessShift(buf, i);
+        const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] + 0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
         if (dark < darkThreshold - 0.10) break;
         const f = fieldPerp(buf, ix, iy);
         if (!f) break;
@@ -3744,7 +3843,10 @@ function generateGroundShadows(state, buf) {
   for (let sy = SY_MIN + 0.01; sy < syHorizon - 0.005; sy += spacing * 0.7) {
     for (let sx = SX_MIN + 0.01; sx <= SX_MAX - 0.01; sx += spacing * 1.05) {
       const idx = bufIdx(buf, sx, sy);
-      if (idx < 0 || buf.surface[idx] !== 2 || !buf.shadow[idx]) continue;
+      // Only place a dash where the soft shadow is at least half-strength —
+      // avoids stippling weak penumbra regions and keeps the cast-shadow
+      // outline crisp on the ground.
+      if (idx < 0 || buf.surface[idx] !== 2 || buf.shadow[idx] < 0.40) continue;
       paths.push([
         [sx, sy - dashLen / 2],
         [sx, sy + dashLen / 2]
