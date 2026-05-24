@@ -4006,7 +4006,13 @@ function generateCellHatches(state, buf) {
       const avg = total / count;
       // Even the brightest cell on the blob gets ONE line so highlights
       // read as the first hatch level rather than pure white paper.
-      const numHatches = Math.max(1, Math.floor((1 - avg) * maxHatches + 0.5));
+      // buf.light has 0.15 ambient floor (light = 0.15 + 0.85 × lambert),
+      // so the darkest single-blob cells only reach avg ≈ 0.15 — not low
+      // enough to round up to numHatches = maxHatches. Rescale (1 − avg)
+      // by 1/0.85 ≈ 1.18 so unlit cells fully reach the 4-line tier, and
+      // clamp at maxHatches.
+      const darkness = Math.min(1, (1 - avg) / 0.85);
+      const numHatches = Math.max(1, Math.min(maxHatches, Math.floor(darkness * maxHatches + 0.5)));
       for (let i = 0; i < numHatches; i++) {
         // Distribute `numHatches` lines across `maxHatches` slot positions.
         // Old formula was Math.round((i+1) * (M/(N+1))) - 1 which collided
@@ -4074,7 +4080,11 @@ function generateMonetHatches(state, buf) {
       // Probability of placing a stroke = darkness^1.8 — a steeper
       // exponent than the old linear curve so mid-tones thin out fast
       // while only the genuinely dark regions stay densely stroked.
-      if (hash01(sx, sy) > Math.pow(darkness, 1.8)) continue;
+      // Minimum 8 % stroke probability everywhere on the surface — even
+      // the brightest highlights get a sparse first-tier of brushstrokes
+      // (no pure-white-paper gaps).
+      const strokeProb = Math.max(0.08, Math.pow(darkness, 1.8));
+      if (hash01(sx, sy) > strokeProb) continue;
       const nx = buf.nx[idx], ny = buf.ny[idx];
       let dirX = -ny, dirY = nx;
       const m = Math.hypot(dirX, dirY);
@@ -4645,16 +4655,20 @@ function computeBlobDistanceTransform(buf) {
 // down to the ground plane. Used as the ripple-ring anchor for the sand
 // garden so the rings wrap around where the blob actually MEETS the
 // ground in 3D, not where it lands on the 2D screen.
-function blobGroundAnchor(buf) {
-  // Two-pass: first compute the world (x, z) centroid of the blob's
-  // hit points, then compute the average and max distance from that
-  // centroid in the xz plane. The MEAN distance is used as the
-  // 'ground radius' — the typical horizontal extent of the blob
-  // footprint — so that the sand-garden ripples can start at the
-  // object's edge (anchor + r) instead of inside it.
+// World-space 2-D distance transform on the blob's ground silhouette.
+// For each ground sample, returns the distance from that sample to the
+// nearest world (x, z) point inside the blob's projected footprint.
+// Used by the sand-garden ripples so the concentric rings follow the
+// ACTUAL silhouette of the object — irregular shapes get irregular
+// rings, not circles around a centroid.
+function blobGroundDistanceField(buf) {
+  // 1) Collect world (x, z) positions of the blob's hit points to find a
+  //    reasonable BOUNDING BOX for the footprint. (Not used to mark
+  //    the footprint itself — that's done by SDF probing below.)
   const W = buf.W, H = buf.H;
   const stride = 4;
-  const positions = [];
+  let xMin = Infinity, xMax = -Infinity, zMin = Infinity, zMax = -Infinity;
+  let anyBlob = false;
   for (let py = 0; py < H; py += stride) {
     for (let px = 0; px < W; px += stride) {
       const idx = py * W + px;
@@ -4664,39 +4678,109 @@ function blobGroundAnchor(buf) {
       const sx = SX_MIN + (px / (W - 1)) * (SX_MAX - SX_MIN);
       const sy = SY_MAX - (py / (H - 1)) * (SY_MAX - SY_MIN);
       const r = castRay(sx, sy);
-      positions.push([CAM[0] + r[0] * t, CAM[2] + r[2] * t]);
+      const wx = CAM[0] + r[0] * t;
+      const wz = CAM[2] + r[2] * t;
+      if (wx < xMin) xMin = wx;
+      if (wx > xMax) xMax = wx;
+      if (wz < zMin) zMin = wz;
+      if (wz > zMax) zMax = wz;
+      anyBlob = true;
     }
   }
-  if (positions.length === 0) return { cx: 0, cz: 0, radius: 0 };
-  let cx = 0, cz = 0;
-  for (const p of positions) { cx += p[0]; cz += p[1]; }
-  cx /= positions.length;
-  cz /= positions.length;
-  let sumDist = 0;
-  for (const p of positions) {
-    const dx = p[0] - cx, dz = p[1] - cz;
-    sumDist += Math.sqrt(dx * dx + dz * dz);
+  if (!anyBlob) return null;
+  // 2) Expand the bbox so ripples have room to propagate outward.
+  const expand = 5.0;
+  xMin -= expand; xMax += expand;
+  zMin -= expand; zMax += expand;
+  // 3) Allocate the coarse distance grid.
+  const G = 180;
+  const dist = new Float32Array(G * G);
+  const big = 9e9;
+  for (let i = 0; i < G * G; i++) dist[i] = big;
+  const cellW = (xMax - xMin) / G;
+  const cellH = (zMax - zMin) / G;
+  // 4) Mark grid cells where the OBJECT'S SDF intersects the ground
+  //    plane (y = GROUND_Y). The previous approach used camera hit
+  //    points projected to (x, z) — but those describe the visible
+  //    SURFACE of the object, which for tall thin objects gives a
+  //    near-zero footprint. Probing the SDF at the ground plane gives
+  //    the true silhouette where the object meets the sand, and rings
+  //    correctly hug its actual outline (a column → circle, a colonnade
+  //    → row of disks, a long rock → elongated shape).
+  const sdf = buf.sdf;
+  if (sdf) {
+    for (let z = 0; z < G; z++) {
+      for (let x = 0; x < G; x++) {
+        const wx = xMin + (x + 0.5) * cellW;
+        const wz = zMin + (z + 0.5) * cellH;
+        if (sdf(wx, GROUND_Y, wz) <= 0) {
+          dist[z * G + x] = 0;
+        }
+      }
+    }
   }
-  const meanDist = sumDist / positions.length;
-  return { cx: cx, cz: cz, radius: meanDist };
+  // 5) Two-pass Chamfer distance transform. Distances are in CELL UNITS;
+  // we convert back to world units at sample time.
+  const D = 1.4142;
+  for (let z = 0; z < G; z++) {
+    for (let x = 0; x < G; x++) {
+      const i = z * G + x;
+      let d = dist[i];
+      if (x > 0)              d = Math.min(d, dist[i - 1] + 1);
+      if (z > 0)              d = Math.min(d, dist[i - G] + 1);
+      if (x > 0 && z > 0)     d = Math.min(d, dist[i - G - 1] + D);
+      if (x < G - 1 && z > 0) d = Math.min(d, dist[i - G + 1] + D);
+      dist[i] = d;
+    }
+  }
+  for (let z = G - 1; z >= 0; z--) {
+    for (let x = G - 1; x >= 0; x--) {
+      const i = z * G + x;
+      let d = dist[i];
+      if (x < G - 1)                  d = Math.min(d, dist[i + 1] + 1);
+      if (z < G - 1)                  d = Math.min(d, dist[i + G] + 1);
+      if (x < G - 1 && z < G - 1)     d = Math.min(d, dist[i + G + 1] + D);
+      if (x > 0 && z < G - 1)         d = Math.min(d, dist[i + G - 1] + D);
+      dist[i] = d;
+    }
+  }
+  return { grid: dist, G: G, xMin: xMin, zMin: zMin, cellW: cellW, cellH: cellH };
+}
+
+// Bilinear sample of the distance field at a world (x, z) position.
+// Returns world-unit distance to the nearest point on the silhouette.
+function sampleGroundDistance(field, worldX, worldZ) {
+  if (!field) return 9e9;
+  const gxf = (worldX - field.xMin) / field.cellW;
+  const gzf = (worldZ - field.zMin) / field.cellH;
+  if (gxf < 0 || gxf >= field.G - 1 || gzf < 0 || gzf >= field.G - 1) return 9e9;
+  const x0 = Math.floor(gxf), z0 = Math.floor(gzf);
+  const fx = gxf - x0, fz = gzf - z0;
+  const G = field.G;
+  const d00 = field.grid[z0 * G + x0];
+  const d10 = field.grid[z0 * G + x0 + 1];
+  const d01 = field.grid[(z0 + 1) * G + x0];
+  const d11 = field.grid[(z0 + 1) * G + x0 + 1];
+  const d0 = d00 * (1 - fx) + d10 * fx;
+  const d1 = d01 * (1 - fx) + d11 * fx;
+  // Convert from cell units to world units (use the smaller cell axis
+  // as the unit — the transform was built with isotropic Chamfer steps).
+  return (d0 * (1 - fz) + d1 * fz) * Math.min(field.cellW, field.cellH);
 }
 
 // Sand-garden displacement at world ground position (worldX, worldZ).
-// Rings start at the anchor's RADIUS (the blob's mean footprint extent)
-// so the first ripple peak coincides with where the object meets the
-// sand, and waves only exist OUTSIDE the silhouette.
+// Rings emanate from the actual SHAPE of the blob's ground silhouette
+// via a world-space distance transform — irregular silhouettes produce
+// irregular rings that follow the contour.
 //
-//   amp  — pure HEIGHT of each ripple (driven by the Waviness slider).
-//   freq — number of rings per world unit (driven by Ripple freq);
-//          high freq gives many tightly-packed rings.
+//   amp  — pure HEIGHT of each ripple (driven by Waviness).
+//   freq — number of rings per world unit (driven by Ripple freq).
 //
-// Falloff is much slower now (0.55, was 1.2) so the rings stay visible
-// at large distances — otherwise high-freq rings die off so fast that
-// freq feels indistinguishable from amplitude.
-function sandGardenRipple(worldX, worldZ, anchor, freq, amp) {
-  const dx = worldX - anchor.cx, dz = worldZ - anchor.cz;
-  const worldDist = Math.sqrt(dx * dx + dz * dz);
-  const distFromEdge = Math.max(0, worldDist - anchor.radius);
+// Falloff (0.55) lets the rings persist outward several wavelengths
+// so the count and the height are perceptually independent.
+function sandGardenRipple(worldX, worldZ, field, freq, amp) {
+  const distFromEdge = sampleGroundDistance(field, worldX, worldZ);
+  if (distFromEdge >= 9e8) return 0;
   const fadeRate = 0.55;
   const falloff = Math.exp(-distFromEdge * fadeRate);
   return Math.cos(distFromEdge * freq) * amp * falloff;
@@ -4711,7 +4795,7 @@ function generateGroundSandGarden(state, buf) {
   const fullRange = syHorizon - SY_MIN;
   // World-space ring anchor — where the blob touches the ground, with
   // a radius equal to the blob's mean horizontal extent.
-  const anchor = blobGroundAnchor(buf);
+  const field = blobGroundDistanceField(buf);
   // Amplitude scales with line spacing so peaks stay near their own row.
   const rippleAmp = maxDsy * 1.10 * (state.waviness || 1);
   const rippleFreq = state.rippleFreq != null ? state.rippleFreq : 7.0;
@@ -4733,7 +4817,7 @@ function generateGroundSandGarden(state, buf) {
       if (tg <= 0) { flush(); continue; }
       const worldX = CAM[0] + r[0] * tg;
       const worldZ = CAM[2] + r[2] * tg;
-      const ripple = sandGardenRipple(worldX, worldZ, anchor, rippleFreq, rippleAmp);
+      const ripple = sandGardenRipple(worldX, worldZ, field, rippleFreq, rippleAmp);
       const wavySy = sy + ripple;
       const idx2 = bufIdx(buf, sx, wavySy);
       const onGround = (idx2 >= 0 && buf.surface[idx2] === 2);
@@ -4822,7 +4906,7 @@ function generateGroundShadows(state, buf) {
   const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
   const rippleAmp = useSandGarden ? maxDsy * 1.10 * (state.waviness || 1) : 0;
   const rippleFreq = state.rippleFreq != null ? state.rippleFreq : 7.0;
-  const anchor = useSandGarden ? blobGroundAnchor(buf) : { cx: 0, cz: 0, radius: 0 };
+  const field = useSandGarden ? blobGroundDistanceField(buf) : null;
   for (let sy = SY_MIN + 0.01; sy < syHorizon - 0.005; sy += yStep) {
     for (let sx = SX_MIN + 0.01; sx <= SX_MAX - 0.01; sx += xStep) {
       const idx = bufIdx(buf, sx, sy);
@@ -4838,7 +4922,7 @@ function generateGroundShadows(state, buf) {
           if (tg > 0) {
             const worldX = CAM[0] + r[0] * tg;
             const worldZ = CAM[2] + r[2] * tg;
-            drawSy = sy + sandGardenRipple(worldX, worldZ, anchor, rippleFreq, rippleAmp);
+            drawSy = sy + sandGardenRipple(worldX, worldZ, field, rippleFreq, rippleAmp);
           }
         }
       }
@@ -6034,6 +6118,7 @@ function renderToSvgString(state) {
   setupCamera(sceneCamera || { tiltDeg: state.camTilt });
 
   const buf = renderSceneBuffer(state, sdf, sceneMaterialFn);
+  buf.sdf = sdf; // stash so post-passes (sand garden, ground transform) can probe SDF directly
   if (sceneBeamMask) applyBeamMask(buf, sceneBeamMask);
   applyToneMap(buf, state);
 
