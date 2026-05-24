@@ -4685,12 +4685,19 @@ function blobGroundAnchor(buf) {
 // Rings start at the anchor's RADIUS (the blob's mean footprint extent)
 // so the first ripple peak coincides with where the object meets the
 // sand, and waves only exist OUTSIDE the silhouette.
+//
+//   amp  — pure HEIGHT of each ripple (driven by the Waviness slider).
+//   freq — number of rings per world unit (driven by Ripple freq);
+//          high freq gives many tightly-packed rings.
+//
+// Falloff is much slower now (0.55, was 1.2) so the rings stay visible
+// at large distances — otherwise high-freq rings die off so fast that
+// freq feels indistinguishable from amplitude.
 function sandGardenRipple(worldX, worldZ, anchor, freq, amp) {
   const dx = worldX - anchor.cx, dz = worldZ - anchor.cz;
   const worldDist = Math.sqrt(dx * dx + dz * dz);
-  // Distance from the object's edge — clamp at 0 inside the radius.
   const distFromEdge = Math.max(0, worldDist - anchor.radius);
-  const fadeRate = 1.2;
+  const fadeRate = 0.55;
   const falloff = Math.exp(-distFromEdge * fadeRate);
   return Math.cos(distFromEdge * freq) * amp * falloff;
 }
