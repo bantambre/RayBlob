@@ -1613,10 +1613,15 @@ const SCENES = {
           { value: 'winter',    label: 'winter'    },
           { value: 'mixed',     label: 'mixed'     }
         ], default: 'conifer' },
-      { id: 'treeCount',   label: 'Tree count',   type: 'int',    min: 4,    max: 24,   step: 1,    default: 12   },
-      { id: 'depthLayers', label: 'Depth layers', type: 'int',    min: 1,    max: 5,    step: 1,    default: 3    },
-      { id: 'depthFade',   label: 'Depth fade',   type: 'number', min: 0.00, max: 1.00, step: 0.05, default: 0.60 },
-      { id: 'sizeJitter',  label: 'Size jitter',  type: 'number', min: 0.00, max: 0.80, step: 0.05, default: 0.40 }
+      { id: 'treeCount',   label: 'Tree count',   type: 'int',    min: 8,    max: 50,   step: 1,    default: 28   },
+      { id: 'depthLayers', label: 'Depth layers', type: 'int',    min: 1,    max: 6,    step: 1,    default: 4    },
+      { id: 'depthFade',   label: 'Depth fade',   type: 'number', min: 0.00, max: 1.00, step: 0.05, default: 0.65 },
+      { id: 'sizeJitter',  label: 'Size jitter',  type: 'number', min: 0.00, max: 0.80, step: 0.05, default: 0.40 },
+      { id: 'heroTree',    label: 'Hero tree',    type: 'enum',
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' },
+      { id: 'heroSide',    label: 'Hero side',    type: 'enum',
+        options: [{ value: 'left', label: 'left' }, { value: 'right', label: 'right' }], default: 'left' },
+      { id: 'heroScale',   label: 'Hero scale',   type: 'number', min: 1.20, max: 3.20, step: 0.10, default: 2.00 }
     ],
     build: function (rng, state, params) {
       // Forest scene with four tree styles and depth-layered placement.
@@ -1692,6 +1697,57 @@ const SCENES = {
         trees.push(tree);
         treeBuckets.push({ cx, cz, t });
       }
+      // Foreground HERO tree — much larger than the rest, positioned
+      // off-centre via heroSide. Lives in the closest depth layer (negative
+      // z) so it dominates the composition while the background grove
+      // recedes through the misty depth-fade tiers.
+      if (params.heroTree === 'yes') {
+        const H = params.heroScale;
+        const hx = (params.heroSide === 'left' ? -1 : 1) * 0.55;
+        const hz = -0.32;
+        const trunkR = 0.038 * H;
+        const canopyR = 0.18 * H;
+        let hero;
+        if (params.style === 'conifer') {
+          const trunkTop = -0.70 + 0.20 * H;
+          const conePeak = trunkTop + canopyR * 3.4;
+          const trunk = makeCylinderY(hx, -0.72, trunkTop, hz, trunkR * 0.7);
+          const cone = makeConeY(hx, conePeak, trunkTop - 0.05, hz, canopyR * 0.95);
+          hero = sdfUnion([trunk, cone], 0.015);
+        } else if (params.style === 'winter') {
+          const trunkTop = -0.70 + 0.55 * H;
+          const trunk = makeCylinderY(hx, -0.72, trunkTop, hz, trunkR);
+          const parts = [trunk];
+          const nB = 6;
+          for (let b = 0; b < nB; b++) {
+            const yaw = (b / nB) * Math.PI * 2 + rng() * 0.6;
+            const lift = (0.5 + rng() * 0.5) * Math.PI / 4;
+            const len = canopyR * (1.4 + rng() * 0.6);
+            const seg = makeCapsuleX(0, 0, 0, len, trunkR * 0.4);
+            let b1 = rotateZ(seg, lift);
+            b1 = rotateY(b1, yaw);
+            b1 = translate(b1, hx, trunkTop + len * 0.5, hz);
+            parts.push(b1);
+          }
+          hero = sdfUnion(parts, 0.015);
+        } else if (params.style === 'oldgrowth') {
+          const trunkTop = -0.70 + 0.35 * H;
+          const trunk = makeCylinderY(hx, -0.72, trunkTop, hz, trunkR * 1.6);
+          const c1 = makeSphere(hx, trunkTop + canopyR * 0.5, hz, canopyR * 1.5);
+          const c2 = makeSphere(hx + canopyR * 0.55, trunkTop + canopyR * 0.9, hz - 0.04, canopyR * 1.1);
+          const c3 = makeSphere(hx - canopyR * 0.35, trunkTop + canopyR * 1.1, hz + 0.04, canopyR * 0.9);
+          hero = sdfUnion([trunk, c1, c2, c3], 0.05);
+        } else {
+          // mixed — round-canopy hero with thick trunk
+          const trunkTop = -0.70 + 0.30 * H;
+          const trunk = makeCylinderY(hx, -0.72, trunkTop, hz, trunkR);
+          const c1 = makeSphere(hx, trunkTop + canopyR * 0.6, hz, canopyR * 1.3);
+          const c2 = makeSphere(hx + canopyR * 0.5, trunkTop + canopyR * 0.9, hz, canopyR * 0.9);
+          hero = sdfUnion([trunk, c1, c2], 0.04);
+        }
+        trees.push(hero);
+        treeBuckets.push({ cx: hx, cz: hz, t: 0 });
+      }
       return {
         sdf: sdfUnion(trees, 0),
         // Misty receding depth: distant trees (high z) get material 4
@@ -1737,8 +1793,10 @@ const SCENES = {
       { id: 'smokeBaseR',     label: 'Smoke base r',   type: 'number', min: 0.03, max: 0.15, step: 0.01, default: 0.07 },
       { id: 'smokeTaper',     label: 'Smoke taper',    type: 'number', min: 0.10, max: 1.20, step: 0.05, default: 0.55 },
       { id: 'smokeDrift',     label: 'Smoke drift',    type: 'number', min: 0.00, max: 0.35, step: 0.02, default: 0.18 },
-      { id: 'smokeWisps',     label: 'Smoke pieces',   type: 'int',    min: 4,    max: 14,   step: 1,    default: 9    },
-      { id: 'smokeBreakup',   label: 'Smoke breakup',  type: 'number', min: 0.00, max: 0.08, step: 0.005, default: 0.030 }
+      { id: 'smokeWisps',     label: 'Smoke pieces',   type: 'int',    min: 6,    max: 18,   step: 1,    default: 12   },
+      { id: 'smokeBreakup',   label: 'Smoke breakup',  type: 'number', min: 0.00, max: 0.20, step: 0.005, default: 0.070 },
+      { id: 'smokeFluidity',  label: 'Smoke fluidity', type: 'number', min: 0.005, max: 0.20, step: 0.005, default: 0.025 },
+      { id: 'cameraYaw',      label: 'Cam yaw (°)',    type: 'number', min: 0,    max: 30,   step: 1,    default: 14   }
     ],
     build: function (rng, state, params) {
       // Stratovolcano — wide conical mountain with a tall wispy plume
@@ -1784,25 +1842,32 @@ const SCENES = {
                   (0.70 + rng() * 0.50);
         smokeParts.push(makeSphere(accumDx, y, accumDz, r));
       }
-      // Lighter smooth-min between puffs (0.04 instead of 0.10) so each
-      // puff still reads as its own bulge rather than melting into a
-      // continuous column.
-      let smoke = sdfUnion(smokeParts, 0.04);
+      // Smoke fluidity: smaller smoothK = puffs blend into a continuous
+      // tube. The previous version (0.04) left each puff visible as a
+      // bulge, which read as "fake" puffballs. Default 0.025 merges them
+      // smoothly so the noise displacement below shapes the silhouette
+      // rather than the discrete spheres.
+      let smoke = sdfUnion(smokeParts, params.smokeFluidity);
       // Gentle twist around y for natural curl as the plume rises.
       smoke = twistY(smoke, 1.0);
-      // Surface breakup — high-frequency noise displacement creates the
-      // wispy ragged silhouette characteristic of real smoke plumes.
+      // Surface breakup — multi-octave noise carves the smooth tube into
+      // realistic wispy filaments. Default amplitude bumped 0.030 → 0.070
+      // so the silhouette is genuinely ragged rather than slightly
+      // textured.
       if (params.smokeBreakup > 0) {
         const n3 = makeNoise3D(state.seed + ':volcanoSmoke');
         smoke = displace(smoke, function (x, y, z) {
-          return 0.45 * n3(x *  8, y *  8, z *  8) +
-                 0.35 * n3(x * 20, y * 20, z * 20) +
-                 0.20 * n3(x * 45, y * 45, z * 45);
+          return 0.50 * n3(x *  5, y *  4, z *  5) +
+                 0.30 * n3(x * 14, y * 12, z * 14) +
+                 0.20 * n3(x * 35, y * 30, z * 35);
         }, params.smokeBreakup);
       }
       // Sharp union between mountain and smoke so the silhouette change
       // at the summit reads as 'rock ends, smoke starts'.
-      return sdfUnion([mountain, smoke], 0.03);
+      return {
+        sdf: sdfUnion([mountain, smoke], 0.03),
+        camera: { tiltDeg: 6, yawDeg: params.cameraYaw }
+      };
     }
   },
   cathedralInterior: function (rng, state) {
