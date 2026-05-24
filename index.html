@@ -3864,7 +3864,11 @@ function generateCellHatches(state, buf) {
       // read as the first hatch level rather than pure white paper.
       const numHatches = Math.max(1, Math.floor((1 - avg) * maxHatches + 0.5));
       for (let i = 0; i < numHatches; i++) {
-        const slotIdx = Math.round((i + 1) * (maxHatches / (numHatches + 1))) - 1;
+        // Distribute `numHatches` lines across `maxHatches` slot positions.
+        // Old formula was Math.round((i+1) * (M/(N+1))) - 1 which collided
+        // (e.g. N=M=4 → slots 0,1,1,2 — only 3 distinct lines for 4 levels).
+        // floor((i + 0.5) * M / N) is collision-free for N ≤ M.
+        const slotIdx = Math.floor((i + 0.5) * maxHatches / numHatches);
         if (slotIdx < 0 || slotIdx >= maxHatches) continue;
         const slotY = cellY0 + (slotIdx + 0.5) / maxHatches * actualCellSize;
         const segs = 8;
