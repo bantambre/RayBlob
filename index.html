@@ -1591,22 +1591,112 @@ const SCENES = {
       };
     }
   },
-  forest: function (rng, state) {
-    // Cluster of tapered trees. Each tree = thin trunk + canopy blob.
-    // Sharp union so individual trees read as distinct silhouettes.
-    const trees = stack(function (i) {
-      const cx = (rng() - 0.5) * 1.6;
-      const cz = (rng() - 0.5) * 0.8 - 0.1;
-      const heightScale = 0.55 + rng() * 0.55;
-      const trunkR = 0.025 + rng() * 0.015;
-      const canopyR = 0.13 * heightScale + rng() * 0.04;
-      const trunkTop = -0.65 + 0.35 * heightScale;
-      const canopyY = trunkTop + canopyR * 0.6;
-      const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR);
-      const canopy = makeSphere(cx, canopyY, cz, canopyR);
-      return sdfUnion([trunk, canopy], 0.03);
-    }, 8, 0);
-    return trees;
+  forest: {
+    ui: [
+      { id: 'style', label: 'Style', type: 'enum',
+        options: [
+          { value: 'conifer',   label: 'conifer'   },
+          { value: 'oldgrowth', label: 'old-growth'},
+          { value: 'winter',    label: 'winter'    },
+          { value: 'mixed',     label: 'mixed'     }
+        ], default: 'conifer' },
+      { id: 'treeCount',   label: 'Tree count',   type: 'int',    min: 4,    max: 24,   step: 1,    default: 12   },
+      { id: 'depthLayers', label: 'Depth layers', type: 'int',    min: 1,    max: 5,    step: 1,    default: 3    },
+      { id: 'depthFade',   label: 'Depth fade',   type: 'number', min: 0.00, max: 1.00, step: 0.05, default: 0.60 },
+      { id: 'sizeJitter',  label: 'Size jitter',  type: 'number', min: 0.00, max: 0.80, step: 0.05, default: 0.40 }
+    ],
+    build: function (rng, state, params) {
+      // Forest scene with four tree styles and depth-layered placement.
+      // Each tree is tagged with its depth layer; the materialFn sweeps
+      // distant trees toward the bright/sparse material so they fade
+      // into atmospheric haze (misty receding depth).
+      const trees = [];
+      const treeBuckets = [];   // {cx, cz, layer, t, halfWidth}
+      const N = params.treeCount;
+      const L = params.depthLayers;
+      for (let i = 0; i < N; i++) {
+        const layer = Math.floor(rng() * L);
+        const t = L <= 1 ? 0 : layer / (L - 1);
+        // Deeper layer = farther in z, slightly compressed in x.
+        const cx = (rng() - 0.5) * (1.7 - t * 0.7);
+        const cz = -0.15 + t * 0.45 + (rng() - 0.5) * 0.20;
+        // Per-tree size variation. Deeper trees are smaller (perspective).
+        const baseHeight = 0.55 + rng() * params.sizeJitter * 1.5;
+        const heightScale = (1 - t * 0.45) * baseHeight;
+        const trunkR = (0.025 + rng() * 0.02) * (1 - t * 0.40);
+        const canopyR = 0.14 * baseHeight + rng() * 0.03;
+        let tree;
+        if (params.style === 'conifer') {
+          // Tall thin trunk + tapered cone canopy.
+          const trunkTop = -0.70 + 0.25 * baseHeight;
+          const conePeak = trunkTop + canopyR * 2.6 * heightScale;
+          const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR * 0.6);
+          const canopy = makeConeY(cx, conePeak, trunkTop - 0.04, cz,
+                                   canopyR * 0.85);
+          tree = sdfUnion([trunk, canopy], 0.012);
+        } else if (params.style === 'winter') {
+          // Bare branches: trunk + 4 angled limbs reaching upward.
+          const trunkTop = -0.70 + 0.55 * heightScale;
+          const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR);
+          const parts = [trunk];
+          const nBranches = 4;
+          for (let b = 0; b < nBranches; b++) {
+            const yaw = (b / nBranches) * Math.PI * 2 + rng() * 0.8;
+            const lift = (0.5 + rng() * 0.5) * Math.PI / 4;  // 22-45° from horizontal
+            const len = canopyR * (1.1 + rng() * 0.6);
+            const seg = makeCapsuleX(0, 0, 0, len, trunkR * 0.45);
+            // Tilt branch upward by `lift` around z, then yaw around y.
+            let b1 = rotateZ(seg, lift);
+            b1 = rotateY(b1, yaw);
+            b1 = translate(b1, cx, trunkTop + len * 0.5, cz);
+            parts.push(b1);
+          }
+          tree = sdfUnion(parts, 0.012);
+        } else if (params.style === 'oldgrowth') {
+          // Thick trunk + larger irregular canopy (two overlapping spheres).
+          const trunkTop = -0.70 + 0.40 * baseHeight * heightScale;
+          const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR * 1.8);
+          const c1 = makeSphere(cx,           trunkTop + canopyR * 0.6 * heightScale, cz, canopyR * 1.4 * heightScale);
+          const c2 = makeSphere(cx + canopyR * 0.5, trunkTop + canopyR * 0.95 * heightScale, cz + (rng() - 0.5) * canopyR * 0.5, canopyR * 1.0 * heightScale);
+          tree = sdfUnion([trunk, c1, c2], 0.04);
+        } else {
+          // mixed — random pick per tree
+          const pick = rng();
+          if (pick < 0.55) {
+            const trunkTop = -0.70 + 0.25 * baseHeight;
+            const conePeak = trunkTop + canopyR * 2.4 * heightScale;
+            const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR * 0.6);
+            const canopy = makeConeY(cx, conePeak, trunkTop - 0.04, cz, canopyR * 0.8);
+            tree = sdfUnion([trunk, canopy], 0.012);
+          } else {
+            const trunkTop = -0.70 + 0.35 * baseHeight;
+            const canopyY = trunkTop + canopyR * 0.6 * heightScale;
+            const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR);
+            const canopy = makeSphere(cx, canopyY, cz, canopyR * heightScale);
+            tree = sdfUnion([trunk, canopy], 0.025);
+          }
+        }
+        trees.push(tree);
+        treeBuckets.push({ cx, cz, t });
+      }
+      return {
+        sdf: sdfUnion(trees, 0),
+        // Misty receding depth: distant trees (high z) get material 4
+        // (medium-sparse, lighter hatching) so they fade into atmospheric
+        // haze. The threshold scales with depthFade so the user can dial
+        // the mist intensity.
+        materialFn: function (x, y, z) {
+          if (params.depthFade <= 0.01) return 0;
+          // Trees with cz > zFar are 'distant' → material 6 (very sparse).
+          // Trees with cz > zMid are 'mid' → material 4.
+          const zFar = 0.20 - 0.10 * params.depthFade;
+          const zMid = -0.05;
+          if (z > zFar) return 6;
+          if (z > zMid) return 4;
+          return 0;
+        }
+      };
+    }
   },
   balloons: function (rng, state) {
     // Hot-air-balloon cluster: spheres with small basket boxes hanging
@@ -2498,73 +2588,230 @@ const SCENES = {
     const tip  = makeConeY(0, 0.55, -0.18, 0, 0.34);
     return sdfUnion([bulb, tip], 0.18);
   },
-  ufo: function (rng, state) {
-    // Saucer = (wide flat disc + dome) profile revolved around Y. The
-    // 2-D profile lives in the (r, y) plane.
-    const disc = box2D(0, 0.55, 0.62, 0.07, 0.05);
-    const dome = circle2D(0, 0.66, 0.20);
-    const saucer = revolveY(sdfUnion([disc, dome], 0.05));
-    return { sdf: saucer, camera: { tiltDeg: 5 } };
+  ufo: {
+    ui: [
+      { id: 'saucerSize',    label: 'Saucer size',   type: 'number', min: 0.20, max: 0.70, step: 0.02, default: 0.36 },
+      { id: 'saucerY',       label: 'Saucer height', type: 'number', min: 0.10, max: 0.80, step: 0.05, default: 0.40 },
+      { id: 'beam',          label: 'Beam',          type: 'enum',
+        options: [
+          { value: 'none', label: 'off' },
+          { value: 'rays', label: 'rays' },
+          { value: 'negative', label: 'negative' },
+          { value: 'both', label: 'both' }
+        ], default: 'negative' },
+      { id: 'beamSpread',    label: 'Beam spread (°)',type: 'number', min: 6,    max: 35,   step: 1,    default: 14   },
+      { id: 'beamRays',      label: 'Ray count',      type: 'int',    min: 5,    max: 30,   step: 1,    default: 12   },
+      { id: 'landscape',     label: 'Landscape',      type: 'enum',
+        options: [
+          { value: 'none',     label: 'none'     },
+          { value: 'dunes',    label: 'dunes'    },
+          { value: 'mountains',label: 'mountains'}
+        ], default: 'dunes' }
+    ],
+    build: function (rng, state, params) {
+      // Detailed flying saucer + landscape + negative-space beam.
+      // Saucer profile in (r, y) plane: wide flat disc + central dome +
+      // small antenna nub on top + rim notches for portholes.
+      const sz = params.saucerSize;
+      const cy = params.saucerY;
+      // Lower disc — flatter and wider.
+      const disc1 = box2D(0, cy - 0.005, sz * 1.00, sz * 0.06, sz * 0.04);
+      // Upper disc — slightly narrower, smoother edge.
+      const disc2 = box2D(0, cy + 0.035, sz * 0.72, sz * 0.04, sz * 0.03);
+      // Central dome.
+      const dome  = circle2D(0, cy + 0.075, sz * 0.30);
+      // Small antenna stub.
+      const ant   = box2D(0, cy + 0.075 + sz * 0.32, sz * 0.04, sz * 0.06, 0.005);
+      const profile = sdfUnion([disc1, disc2, dome, ant], 0.025);
+      let saucer = revolveY(profile);
+      // Optional landscape below.
+      let combined = saucer;
+      if (params.landscape === 'dunes') {
+        const d1 = makeBlobSDFAt(rng, { center: [-0.35, -0.45, 0.20], nSpheres: 3, smoothK: 0.30, spread: 1.20, verticality: 0.40, pointiness: 0, scale: 0.55 });
+        const d2 = makeBlobSDFAt(rng, { center: [ 0.40, -0.50, 0.10], nSpheres: 3, smoothK: 0.30, spread: 1.00, verticality: 0.35, pointiness: 0, scale: 0.45 });
+        combined = sdfUnion([saucer, d1, d2], 0);
+      } else if (params.landscape === 'mountains') {
+        const m1 = makeBlobSDFAt(rng, { center: [-0.45, -0.30, 0.30], nSpheres: 4, smoothK: 0.18, spread: 1.10, verticality: 0.85, pointiness: 0.4, scale: 0.45 });
+        const m2 = makeBlobSDFAt(rng, { center: [ 0.30, -0.30, 0.25], nSpheres: 4, smoothK: 0.18, spread: 1.10, verticality: 0.85, pointiness: 0.4, scale: 0.45 });
+        combined = sdfUnion([saucer, m1, m2], 0);
+      }
+      const result = { sdf: combined, camera: { tiltDeg: 6 } };
+      const wantNegative = (params.beam === 'negative' || params.beam === 'both');
+      const wantRays     = (params.beam === 'rays'     || params.beam === 'both');
+      if (wantNegative) {
+        // Beam shoots STRAIGHT DOWN from the saucer's underside. Apex at
+        // (0, cy - 0.01, 0); direction (0, -1, 0) in screen space ≈ down.
+        result.beamMask = {
+          apex: [0, cy - 0.01, 0],
+          dirSx: 0, dirSy: -1,
+          halfAngleDeg: params.beamSpread
+        };
+      }
+      if (wantRays) {
+        result.extraStrokes = function (ctx) {
+          return lighthouseBeam(ctx, [0, cy - 0.01, 0], {
+            numRays: params.beamRays,
+            centerDeg: 180,   // 0 = up, 180 = straight down
+            spreadDeg: params.beamSpread,
+            lengthVB: 1400
+          });
+        };
+      }
+      return result;
+    }
   },
-  recursiveTower: function (rng, state) {
-    // Self-similar tower: stacked boxes that shrink in both width and
-    // height as they rise. The `stack` helper does the loop + union.
-    const tower = stack(function (i) {
-      const sc = Math.pow(0.82, i);
-      const halfH = 0.13 * sc;
-      const halfW = 0.36 * sc;
-      // y position accumulates: each level sits on top of the previous.
-      let y = -0.65;
-      for (let j = 0; j < i; j++) y += 0.26 * Math.pow(0.82, j);
-      y += halfH;
-      return makeBox(0, y, 0, halfW, halfH, halfW, 0.01);
-    }, 7, 0);
-    return { sdf: tower, camera: { tiltDeg: 5, yawDeg: 14 } };
+  recursiveTower: {
+    ui: [
+      { id: 'tiers',     label: 'Tiers',        type: 'int',    min: 3,    max: 9,    step: 1,    default: 6    },
+      { id: 'baseWidth', label: 'Base width',   type: 'number', min: 0.30, max: 0.80, step: 0.02, default: 0.55 },
+      { id: 'tierTaper', label: 'Tier taper',   type: 'number', min: 0.70, max: 0.95, step: 0.01, default: 0.84 },
+      { id: 'tierHeight',label: 'Tier height',  type: 'number', min: 0.10, max: 0.30, step: 0.01, default: 0.18 },
+      { id: 'eaveOverhang', label: 'Eave size', type: 'number', min: 0.00, max: 0.20, step: 0.01, default: 0.09 },
+      { id: 'rim',       label: 'Rim ledge',    type: 'enum',
+        options: [{value:'yes',label:'yes'},{value:'no',label:'no'}], default: 'yes' }
+    ],
+    build: function (rng, state, params) {
+      // Pagoda-style multi-tier tower. Each tier is a square body box
+      // with a wider flat eave on top (the overhanging pagoda roof
+      // edge). Tiers shrink by `tierTaper` and stack so the whole tower
+      // takes up most of the frame height.
+      const parts = [];
+      const n = params.tiers;
+      const groundY = -0.70;
+      let y = groundY;
+      let sc = 1.0;
+      for (let i = 0; i < n; i++) {
+        const halfW = params.baseWidth * sc;
+        const halfH = params.tierHeight * sc * 0.55;
+        const eaveHalfW = halfW + params.eaveOverhang * sc;
+        const eaveHalfH = halfH * 0.10;
+        // Body box of this tier.
+        parts.push(makeBox(0, y + halfH, 0, halfW, halfH, halfW, 0.010));
+        // Eave (the wider, flatter top edge of the tier).
+        const eaveCenterY = y + 2 * halfH + eaveHalfH;
+        parts.push(makeBox(0, eaveCenterY, 0, eaveHalfW, eaveHalfH, eaveHalfW, 0.008));
+        // Rim ledge — a thinner box just below the eave.
+        if (params.rim === 'yes') {
+          parts.push(makeBox(0, y + 2 * halfH - eaveHalfH * 0.4, 0,
+                             halfW + params.eaveOverhang * sc * 0.4,
+                             eaveHalfH * 0.5,
+                             halfW + params.eaveOverhang * sc * 0.4, 0.005));
+        }
+        y = eaveCenterY + eaveHalfH;
+        sc *= params.tierTaper;
+      }
+      // Spire on top.
+      parts.push(makeConeY(0, y + 0.18 * sc, y, 0, params.baseWidth * sc * 0.45));
+      return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 5, yawDeg: 18 } };
+    }
   },
   twistedColumn: {
     ui: [
-      { id: 'columnCount',  label: 'Columns',        type: 'int',    min: 2,    max: 7,    step: 1,    default: 4    },
+      { id: 'columnCount',  label: 'Columns',        type: 'int',    min: 2,    max: 8,    step: 1,    default: 5    },
       { id: 'twistAmount',  label: 'Twist',          type: 'number', min: 0.50, max: 6.00, step: 0.10, default: 3.20 },
-      { id: 'twistVariety', label: 'Twist variety',  type: 'number', min: 0.00, max: 0.60, step: 0.05, default: 0.20 },
-      { id: 'columnHeight', label: 'Column height',  type: 'number', min: 0.40, max: 1.20, step: 0.05, default: 0.85 },
-      { id: 'columnWidth',  label: 'Column width',   type: 'number', min: 0.06, max: 0.22, step: 0.01, default: 0.11 },
-      { id: 'spacing',      label: 'Spacing',        type: 'number', min: 0.18, max: 0.50, step: 0.02, default: 0.30 },
+      { id: 'twistVariety', label: 'Twist variety',  type: 'number', min: 0.00, max: 0.60, step: 0.05, default: 0.25 },
+      { id: 'columnHeight', label: 'Column height',  type: 'number', min: 0.50, max: 1.50, step: 0.05, default: 1.15 },
+      { id: 'columnWidth',  label: 'Column width',   type: 'number', min: 0.08, max: 0.30, step: 0.01, default: 0.16 },
+      { id: 'spacing',      label: 'Spacing',        type: 'number', min: 0.25, max: 0.70, step: 0.02, default: 0.46 },
       { id: 'pedestal',     label: 'Pedestal',       type: 'enum',
-        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' }
+        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' },
+      { id: 'lintel',       label: 'Lintel',         type: 'enum',
+        options: [
+          { value: 'none',   label: 'none'   },
+          { value: 'flat',   label: 'flat'   },
+          { value: 'arches', label: 'arches' }
+        ], default: 'flat' },
+      { id: 'brokenChance', label: 'Broken %',       type: 'number', min: 0.00, max: 0.60, step: 0.05, default: 0.20 }
     ],
     build: function (rng, state, params) {
-      // Solomonic colonnade — multiple twisted columns side-by-side,
-      // each with its own twist amount, height variation, and optional
-      // square pedestal + capital. Evokes Bernini's baroque columns or
-      // an ancient temple. Each column is built at origin (bottom at
-      // y = 0) then translated to its lateral position.
+      // Solomonic colonnade — temple-scale, with optional connecting
+      // architecture above (flat lintel architrave or arches between
+      // columns) and a chance each column is broken / partially fallen.
       const cols = [];
       const n = params.columnCount;
       const centerOffset = -(n - 1) / 2 * params.spacing;
       const groundY = -0.5;
-      const baseHalfH = 0.035;
+      const baseHalfH = 0.045;
       const hasBase = params.pedestal === 'yes';
+      // Track each column's actual top y so the lintel sits on the
+      // shortest standing column (so broken columns don't poke through
+      // the lintel awkwardly).
+      let minStandingTop = Infinity;
+      const colHeights = [];
+      const isBroken = [];
+      for (let i = 0; i < n; i++) {
+        const twist = params.twistAmount *
+                      (1 + (rng() - 0.5) * 2 * params.twistVariety);
+        const broken = rng() < params.brokenChance;
+        const baseH = params.columnHeight * (0.92 + rng() * 0.16);
+        const h = broken ? baseH * (0.25 + rng() * 0.40) : baseH;
+        colHeights.push(h);
+        isBroken.push(broken);
+        if (!broken) minStandingTop = Math.min(minStandingTop, 2 * h);
+      }
+      // Pre-pass done; now build assembly.
+      const lintelY = (minStandingTop === Infinity) ? 0 : minStandingTop;
       for (let i = 0; i < n; i++) {
         const cx = centerOffset + i * params.spacing;
         const twist = params.twistAmount *
                       (1 + (rng() - 0.5) * 2 * params.twistVariety);
-        const h = params.columnHeight * (0.95 + rng() * 0.10);
+        const h = colHeights[i];
         const w = params.columnWidth;
-        // Slab centred at y=h so its bottom is at y=0; twistY rotates
-        // around the y axis based on local y. The result has bottom at
-        // y=0 and top at y=2h.
         const slab = makeBox(0, h, 0, w * 1.5, h, w * 0.55);
         let col = twistY(slab, twist);
         const parts = [col];
         if (hasBase) {
-          const baseExtent = w * 1.7;
-          parts.push(makeBox(0, -baseHalfH, 0, baseExtent, baseHalfH, baseExtent, 0.01));
-          parts.push(makeBox(0, 2 * h + baseHalfH, 0, baseExtent, baseHalfH, baseExtent, 0.01));
+          const baseExtent = w * 1.8;
+          parts.push(makeBox(0, -baseHalfH, 0, baseExtent, baseHalfH, baseExtent, 0.012));
+          // Only put a capital on UNBROKEN columns.
+          if (!isBroken[i]) {
+            parts.push(makeBox(0, 2 * h + baseHalfH, 0, baseExtent, baseHalfH, baseExtent, 0.012));
+          }
         }
         let assembly = sdfUnion(parts, 0.02);
         const liftY = groundY + (hasBase ? 2 * baseHalfH : 0);
         assembly = translate(assembly, cx, liftY, 0);
         cols.push(assembly);
+        // Broken column: add a fallen drum on the ground next to it.
+        if (isBroken[i]) {
+          const drumR = w * 1.05;
+          const drumLen = w * 1.6;
+          // Lying capsule along X, rotated random yaw, translated to base.
+          let drum = makeCapsuleX(0, 0, 0, drumLen, drumR);
+          drum = rotateY(drum, rng() * Math.PI * 2);
+          drum = translate(drum, cx + (rng() - 0.5) * 0.10,
+                                 groundY + drumR,
+                                 (rng() - 0.5) * 0.08);
+          cols.push(drum);
+        }
+      }
+      // Lintel architecture above the standing columns.
+      if (params.lintel !== 'none' && minStandingTop !== Infinity) {
+        const liftY = groundY + (hasBase ? 2 * baseHalfH : 0);
+        const lintelWorldY = liftY + lintelY + baseHalfH * 2;
+        const lintelExtent = (n - 1) / 2 * params.spacing + params.columnWidth * 2.0;
+        if (params.lintel === 'flat') {
+          const lintelH = 0.05;
+          cols.push(makeBox(0, lintelWorldY + lintelH, 0,
+                            lintelExtent, lintelH, params.columnWidth * 1.0, 0.012));
+        } else if (params.lintel === 'arches') {
+          // Long solid lintel block with semicircular cutouts between
+          // columns (the cutouts make the lintel read as an arcade).
+          const lintelH = 0.13;
+          const blockY = lintelWorldY + lintelH;
+          let lintel = makeBox(0, blockY, 0,
+                               lintelExtent, lintelH, params.columnWidth * 1.0, 0.012);
+          // Subtract semi-circular openings between adjacent columns.
+          const carvers = [];
+          for (let i = 0; i < n - 1; i++) {
+            const cx = centerOffset + (i + 0.5) * params.spacing;
+            const archR = params.spacing * 0.42;
+            carvers.push(makeCapsuleZ(cx, blockY - lintelH, 0,
+                                       params.columnWidth * 1.2, archR));
+          }
+          lintel = sdfSubtract(lintel, carvers);
+          cols.push(lintel);
+        }
       }
       return {
         sdf: sdfUnion(cols, 0),
