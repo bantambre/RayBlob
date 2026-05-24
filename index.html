@@ -3823,12 +3823,17 @@ function generateHatches(state, buf) {
 function generateCellHatches(state, buf) {
   const paths = [];
   const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
-  // Cell grid: maxHatches 4 → 3 makes cells ~25% smaller on each side
-  // (≈ 1.8× more cells per page area, roughly 'twice as dense'). Each
-  // cell now resolves 3 tonal levels but they interact spatially so
-  // the overall halftone reads finer.
-  const maxHatches = 3;
-  const cellSize = baseSpacing * maxHatches;
+  // Cell grid: maxHatches and cellSize are now decoupled so we can keep
+  // 4 tonal levels per cell while shrinking cells for halftone density.
+  // - maxHatches = 4 → cells resolve 4 tonal steps (1, 2, 3, 4 lines).
+  // - cellSize = baseSpacing × 2.5 → cells are ~1.6× smaller per side
+  //   (about 2.6× more cells per page area) than the original
+  //   baseSpacing × 4 sizing.
+  // Line spacing inside a cell = cellSize / maxHatches = 0.625 × the
+  // user's lw spacing — a touch denser than the lw spec, which is the
+  // tradeoff for finer halftone resolution.
+  const maxHatches = 4;
+  const cellSize = baseSpacing * 2.5;
   const cellsX = Math.max(2, Math.round((SX_MAX - SX_MIN) / cellSize));
   const actualCellSize = (SX_MAX - SX_MIN) / cellsX;
   const cellsY = Math.max(2, Math.round((SY_MAX - SY_MIN) / actualCellSize));
