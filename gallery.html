@@ -38,6 +38,9 @@
 <div class="bar">
   <label>Matrix</label>
   <select id="matrix">
+    <option value="newScenes" selected>New / overhauled scenes</option>
+    <option value="sandGardenTour">Sand garden tour</option>
+    <option value="shadowShowcase">Shadow showcase (low sun, AO)</option>
     <option value="hatch">Hatch styles (single blob)</option>
     <option value="sky">Sky styles (lighthouse)</option>
     <option value="scenes">Scene tour (default settings)</option>
@@ -90,7 +93,7 @@ const MATRICES = {
   },
 
   scenes: function () {
-    const tour = ['single', 'monoliths', 'arch', 'iceberg', 'pyramid', 'cone',
+    const tour = ['single', 'monoliths', 'arch', 'iceberg', 'pyramid',
                   'lighthouse', 'cairn', 'volcano', 'forest', 'twistedColumn',
                   'recursiveTower', 'ufo', 'mountains', 'tornado', 'mengerSponge',
                   'cathedralInterior', 'astronaut', 'aurora', 'searchlight'];
@@ -100,6 +103,79 @@ const MATRICES = {
         state: { scene: s }
       };
     });
+  },
+
+  newScenes: function () {
+    // Recently overhauled / new scenes at sensible default pairings so
+    // they each show their best face.
+    return [
+      { title: 'arch (sea-arch at waterline)',
+        state: { scene: 'arch', groundStyle: 'waves', skyStyle: 'gradient' } },
+      { title: 'pyramid (long sun shadow)',
+        state: { scene: 'pyramid', lx: -0.95, ly: 0.35, lz: -0.10,
+                 skyStyle: 'gradient', groundStyle: 'perspective' } },
+      { title: 'twistedColumn → Solomonic colonnade',
+        state: { scene: 'twistedColumn', skyStyle: 'gradient' } },
+      { title: 'monoliths (Stones of Stenness)',
+        state: { scene: 'monoliths', skyStyle: 'gradient',
+                 groundStyle: 'perspective' } },
+      { title: 'monoliths · sand garden',
+        state: { scene: 'monoliths', skyStyle: 'gradient',
+                 groundStyle: 'sandGarden', waviness: 3 } },
+      { title: 'cairn (rocky / weathered)',
+        state: { scene: 'cairn', skyStyle: 'gradient' } },
+      { title: 'cairn · sand garden',
+        state: { scene: 'cairn', skyStyle: 'gradient',
+                 groundStyle: 'sandGarden', waviness: 2.5 } },
+      { title: 'iceberg (water-line material, variable shape)',
+        state: { scene: 'iceberg', groundStyle: 'waves', skyStyle: 'gradient' } },
+      { title: 'lighthouse (rocks + dome beam)',
+        state: { scene: 'lighthouse', groundStyle: 'waves', skyStyle: 'stars' } },
+      { title: 'cairn · pyramidal tall stack',
+        state: { scene: 'cairn',
+                 sceneParams: { stacks: 7, taper: 0.30, baseScale: 0.40,
+                                roundMix: 0.65, jaggedness: 0.10 } } }
+    ];
+  },
+
+  sandGardenTour: function () {
+    // Sand-garden ground style applied to several blob/rock scenes so
+    // you can see how the concentric ripples wrap around different
+    // silhouettes.
+    const scenes = ['single', 'monoliths', 'cairn', 'pyramid', 'iceberg',
+                    'arch', 'mengerSponge', 'mountains'];
+    return scenes.map(function (s) {
+      return {
+        title: 'sandGarden · ' + s,
+        state: { scene: s, groundStyle: 'sandGarden',
+                 skyStyle: 'paperGrain', waviness: 2.5 }
+      };
+    });
+  },
+
+  shadowShowcase: function () {
+    // The new soft shadow + AO improvements are most visible on scenes
+    // with high vertical mass + low sun. Each entry sets a low light
+    // angle that throws a long horizontal cast shadow across the ground.
+    const lowSunLight = { lx: -1.10, ly: 0.30, lz: -0.10 };
+    return [
+      { title: 'pyramid · low sun (long shadow)',
+        state: Object.assign({ scene: 'pyramid' }, lowSunLight) },
+      { title: 'monoliths · low sun',
+        state: Object.assign({ scene: 'monoliths' }, lowSunLight) },
+      { title: 'twistedColumn · low sun',
+        state: Object.assign({ scene: 'twistedColumn' }, lowSunLight) },
+      { title: 'cairn · low sun',
+        state: Object.assign({ scene: 'cairn' }, lowSunLight) },
+      { title: 'lighthouse · low sun',
+        state: Object.assign({ scene: 'lighthouse', groundStyle: 'waves' }, lowSunLight) },
+      { title: 'arch · low sun',
+        state: Object.assign({ scene: 'arch', groundStyle: 'waves' }, lowSunLight) },
+      { title: 'pyramid · overhead noon',
+        state: { scene: 'pyramid', lx: -0.20, ly: 1.20, lz: 0.10 } },
+      { title: 'pyramid · backlight',
+        state: { scene: 'pyramid', lx: 0.10, ly: 0.30, lz: -1.20 } }
+    ];
   },
 
   lighthouseScale: function () {
