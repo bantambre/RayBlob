@@ -3648,10 +3648,11 @@ function generateHatches(state, buf) {
 function generateCellHatches(state, buf) {
   const paths = [];
   const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
-  // Smaller cells (6 lines per cell instead of 12) so the brightness
-  // halftone resolution is roughly 4× finer per page area. Cell height
-  // still fits exactly maxHatches lines at the active line spacing.
-  const maxHatches = 6;
+  // Each cell holds up to 18 hatch slots (was 6) — cells are 3× larger
+  // on each axis, so the cell becomes a chunky halftone block that
+  // packs a much wider tonal range internally (18 discrete levels per
+  // cell instead of 6).
+  const maxHatches = 18;
   const cellSize = baseSpacing * maxHatches;
   const cellsX = Math.max(2, Math.round((SX_MAX - SX_MIN) / cellSize));
   const actualCellSize = (SX_MAX - SX_MIN) / cellsX;
