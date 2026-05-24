@@ -52,7 +52,6 @@
         <option value="lighthouse">Lighthouse</option>
         <option value="cairn">Cairn</option>
         <option value="iceberg">Iceberg</option>
-        <option value="cone">Cone</option>
         <option value="pyramid">Pyramid</option>
         <option value="lighthouseIsland">Lighthouse island</option>
         <option value="twistedColumn">Twisted column</option>
@@ -1013,29 +1012,90 @@ const SCENES = {
       });
     }
   },
-  monoliths: function (rng, state) {
-    // 5 tall, slim, pointed stones spread across x. Sharp union so each
-    // reads as its own object.
-    const blobs = [];
-    const n = 5;
-    for (let i = 0; i < n; i++) {
-      const t = (i + 0.5) / n - 0.5;            // -0.4 to 0.4
-      const x = t * 1.7;
-      const z = (rng() - 0.5) * 0.55 - 0.1;
-      const h = 0.85 + rng() * 0.55;
-      blobs.push(makeBlobSDFAt(rng, {
-        center: [x, 0, z],
-        nSpheres: 3,
-        smoothK: 0.12,
-        spread: 0.35,
-        verticality: 1.4 + h,
-        pointiness: 0.25,
-        scale: 0.5
-      }));
+  monoliths: {
+    ui: [
+      { id: 'stoneCount',   label: 'Stone count',  type: 'int',    min: 3,    max: 12,   step: 1,    default: 7    },
+      { id: 'ringRadius',   label: 'Ring radius',  type: 'number', min: 0.40, max: 1.40, step: 0.05, default: 0.85 },
+      { id: 'ringFlatten',  label: 'Ring flatten', type: 'number', min: 0.20, max: 1.00, step: 0.05, default: 0.50 },
+      { id: 'maxHeight',    label: 'Max height',   type: 'number', min: 0.40, max: 1.40, step: 0.05, default: 0.95 },
+      { id: 'thickness',    label: 'Slab thinness',type: 'number', min: 0.15, max: 0.80, step: 0.05, default: 0.40 },
+      { id: 'tiltAmount',   label: 'Tilt',         type: 'number', min: 0.00, max: 0.45, step: 0.02, default: 0.12 },
+      { id: 'roughness',    label: 'Roughness',    type: 'number', min: 0.00, max: 0.10, step: 0.005, default: 0.025 },
+      { id: 'fallenChance', label: 'Fallen %',     type: 'number', min: 0.00, max: 0.60, step: 0.05, default: 0.10 }
+    ],
+    build: function (rng, state, params) {
+      // Stones-of-Stenness style: a roughly circular ring of tall thin
+      // sandstone slabs, each yaw-rotated to face a different direction,
+      // slightly tilted (rotation around the base, so the bottom stays
+      // planted), with stratified-noise surface weathering. Some stones
+      // may be "fallen" — lying flat on the ground in random orientation.
+      const stones = [];
+      const n = params.stoneCount;
+      const GROUND_Y = -0.5;
+      for (let i = 0; i < n; i++) {
+        // Position around an ellipse. The ring is flattened in z so the
+        // camera perspective foreshortens the back of the circle naturally.
+        const baseAngle = (i / n) * Math.PI * 2;
+        // angle jitter: up to half a stone's slot in either direction.
+        const angleJitter = (rng() - 0.5) * (Math.PI / n) * 0.7;
+        const angle = baseAngle + angleJitter;
+        const r = params.ringRadius * (0.85 + rng() * 0.30);
+        const cx = Math.cos(angle) * r;
+        const cz = Math.sin(angle) * r * params.ringFlatten;
+        // Each slab varies in dimensions: tall, narrow (wide face),
+        // thin (edge-on face).
+        const stoneH = (0.55 + rng() * 0.45) * params.maxHeight;
+        const stoneW = 0.10 + rng() * 0.05;
+        const stoneD = stoneW * params.thickness;
+        const fallen = rng() < params.fallenChance;
+        let stone;
+        if (fallen) {
+          // Lying flat: the box's long axis is horizontal (x in local
+          // frame), height in local y, width in local z.
+          const halfH = stoneD;       // thin axis up
+          let s = makeBox(0, 0, 0, stoneH, halfH, stoneW, 0.02);
+          // Put the BOTTOM at y=0 in local frame (translate up by halfH).
+          s = translate(s, 0, halfH, 0);
+          const yaw = rng() * Math.PI * 2;
+          s = rotateY(s, yaw);
+          stone = translate(s, cx, GROUND_Y, cz);
+        } else {
+          // Standing: build the box at origin, translate UP by half-height
+          // so its bottom sits at the world origin, then rotate around
+          // origin (= the base of the stone), then translate to position.
+          let s = makeBox(0, 0, 0, stoneW, stoneH, stoneD, 0.02);
+          s = translate(s, 0, stoneH, 0);
+          // Random yaw — every stone faces a different direction.
+          const yaw = rng() * Math.PI * 2;
+          s = rotateY(s, yaw);
+          // Slight tilt forward/back and side-to-side. The rotation
+          // pivot is the origin (the stone's base) so the bottom stays
+          // planted on the ground.
+          const tiltX = (rng() - 0.5) * params.tiltAmount;
+          const tiltZ = (rng() - 0.5) * params.tiltAmount;
+          if (tiltX !== 0) s = rotateX(s, tiltX);
+          if (tiltZ !== 0) s = rotateZ(s, tiltZ);
+          stone = translate(s, cx, GROUND_Y, cz);
+        }
+        stones.push(stone);
+      }
+      let combined = sdfUnion(stones, 0);
+      // Sandstone weathering: anisotropic noise with strong y frequency
+      // produces faint horizontal layering (stratification) plus
+      // isotropic small-scale wear.
+      if (params.roughness > 0) {
+        const n3 = makeNoise3D(state.seed + ':monolithNoise');
+        combined = displace(combined, function (x, y, z) {
+          const strata = n3(x * 3, y * 25, z * 3);
+          const wear   = n3(x * 8, y * 8,  z * 8);
+          return 0.55 * strata + 0.45 * wear;
+        }, params.roughness);
+      }
+      return combined;
     }
-    return sdfUnion(blobs, 0);
   },
   arch: function (rng, state) {
+    // Old arch (replaced below with octahedral version)
     // Tall-ish rock with a tunnel carved front-to-back, just above the
     // horizon — so the camera sees a circular hole through the rock with
     // sky/water visible on the far side.
@@ -1245,20 +1305,25 @@ const SCENES = {
   cairn: {
     ui: [
       { id: 'stacks',         label: 'Stacks',         type: 'int',    min: 3,    max: 9,    step: 1,    default: 5    },
-      { id: 'shardsPerStack', label: 'Shards/stack',   type: 'int',    min: 2,    max: 6,    step: 1,    default: 3    },
+      { id: 'shardsPerStack', label: 'Shards/stack',   type: 'int',    min: 3,    max: 8,    step: 1,    default: 5    },
       { id: 'baseScale',      label: 'Base scale',     type: 'number', min: 0.15, max: 0.50, step: 0.02, default: 0.32 },
       { id: 'taper',          label: 'Taper',          type: 'number', min: 0.10, max: 0.85, step: 0.05, default: 0.55 },
       { id: 'flatness',       label: 'Flatness',       type: 'number', min: 0.30, max: 1.20, step: 0.05, default: 0.55 },
-      { id: 'wobble',         label: 'Wobble',         type: 'number', min: 0.00, max: 0.15, step: 0.01, default: 0.04 },
-      { id: 'smoothK',        label: 'Smooth K',       type: 'number', min: 0.00, max: 0.10, step: 0.005, default: 0.015 },
-      { id: 'jaggedness',     label: 'Jaggedness',     type: 'number', min: 0.00, max: 0.10, step: 0.005, default: 0.025 }
+      { id: 'flatnessJitter', label: 'Flatness jitter',type: 'number', min: 0.00, max: 0.60, step: 0.05, default: 0.30 },
+      { id: 'wobble',         label: 'Wobble',         type: 'number', min: 0.00, max: 0.15, step: 0.01, default: 0.05 },
+      { id: 'smoothK',        label: 'Smooth K',       type: 'number', min: 0.00, max: 0.10, step: 0.005, default: 0.030 },
+      { id: 'roundMix',       label: 'Round mix',      type: 'number', min: 0.00, max: 1.00, step: 0.05, default: 0.65 },
+      { id: 'jaggedness',     label: 'Jaggedness',     type: 'number', min: 0.00, max: 0.20, step: 0.005, default: 0.080 }
     ],
     build: function (rng, state, params) {
-      // Cairn — a pyramidal stack of flat octahedral rocks. Each
-      // successive stack is `taper` smaller than the previous and
-      // sits with a small lateral `wobble` for natural imperfection.
-      // `flatness` < 1 squashes each stack vertically so the rocks
-      // read as stones rather than spires; > 1 stretches them.
+      // Cairn — a pyramidal stack of weathered rocks. Each stack is a
+      // small octahedral blob mixed with spheres (roundMix) so the
+      // shards don't all look like diamonds. Each rock gets its own
+      // randomized flatness within ±flatnessJitter so the silhouette
+      // varies stone-to-stone rather than reading as repeated copies.
+      // A higher smoothK softens the joins so adjacent rocks blend into
+      // a single weathered mass. Multi-octave noise displacement
+      // (controlled by jaggedness) adds rocky surface texture.
       const stacks = params.stacks;
       const rocks = [];
       let cy = -0.55;
@@ -1267,24 +1332,32 @@ const SCENES = {
         const scale = params.baseScale * (1 - t * params.taper);
         const cx = (rng() - 0.5) * params.wobble;
         const cz = (rng() - 0.5) * params.wobble;
+        // Per-rock flatness jitter so stones vary instead of repeating.
+        const flatnessHere = params.flatness *
+                             (1 + (rng() - 0.5) * 2 * params.flatnessJitter);
+        // Per-rock shard count jitter for additional variety.
+        const shardsHere = Math.max(2, params.shardsPerStack + (rng() < 0.5 ? -1 : 1));
         rocks.push(makeOctahedralBlobAt(rng, {
           center: [cx, cy, cz],
-          nSpheres: params.shardsPerStack,
+          nSpheres: shardsHere,
           smoothK: params.smoothK,
-          spread: 0.30,
-          verticality: params.flatness,
+          spread: 0.45 + rng() * 0.25,
+          verticality: flatnessHere,
           pointiness: 0,
-          scale: scale
+          scale: scale,
+          roundMix: params.roundMix,
+          randomRotate: true
         }));
         // Step y up by ~ this stack's vertical extent.
-        cy += scale * params.flatness * 1.4;
+        cy += scale * flatnessHere * 1.30;
       }
-      let cairn = sdfUnion(rocks, 0.025);
+      let cairn = sdfUnion(rocks, params.smoothK);
       if (params.jaggedness > 0) {
         const n3 = makeNoise3D(state.seed + ':cairn');
         cairn = displace(cairn, function (x, y, z) {
-          return 0.65 * n3(x * 9, y * 9, z * 9) +
-                 0.35 * n3(x * 22, y * 22, z * 22);
+          return 0.50 * n3(x *  6, y *  6, z *  6) +
+                 0.30 * n3(x * 16, y * 16, z * 16) +
+                 0.20 * n3(x * 38, y * 38, z * 38);
         }, params.jaggedness);
       }
       return cairn;
@@ -1306,44 +1379,109 @@ const SCENES = {
       camera: { tiltDeg: 9, yawDeg: 25 }
     };
   },
-  iceberg: function (rng, state) {
-    // Tip + base softly merged, then surface-roughened with 3-D fBm noise
-    // to break the smooth-blob silhouette into jagged ice facets.
-    const tip = makeBlobSDFAt(rng, {
-      center: [0.08, 0.32, 0],
-      nSpheres: 3,
-      smoothK: 0.12,
-      spread: 0.32,
-      verticality: 1.25,
-      pointiness: 0.55,
-      scale: 0.35
-    });
-    const base = makeBlobSDFAt(rng, {
-      center: [-0.05, -0.30, 0],
-      nSpheres: 5,
-      smoothK: 0.35,
-      spread: 1.1,
-      verticality: 0.75,
-      pointiness: 0,
-      scale: 0.7
-    });
-    const smoothBerg = sdfUnion([tip, base], 0.22);
-    // Two-octave noise for ice character: low frequency for big facets,
-    // high frequency for crystalline grain.
-    const n3 = makeNoise3D(state.seed + ':icebergNoise');
-    function jagged(x, y, z) {
-      return 0.65 * n3(x * 4, y * 4, z * 4) +
-             0.35 * n3(x * 11, y * 11, z * 11);
-    }
-    return {
-      sdf: displace(smoothBerg, jagged, 0.09),
-      // Above the waterline (y > 0) reads as bright sun-struck ice;
-      // below the waterline reads as dense/dark submerged mass. The
-      // hatcher consults MATERIAL_PROPS to swing density either way.
-      materialFn: function (x, y, z) {
-        return y > 0 ? 2 : 1;
+  iceberg: {
+    ui: [
+      { id: 'aboveSize',  label: 'Above-water size',  type: 'number', min: 0.20, max: 0.80, step: 0.02, default: 0.45 },
+      { id: 'belowSize',  label: 'Below-water size',  type: 'number', min: 0.40, max: 1.50, step: 0.05, default: 1.00 },
+      { id: 'pinnacle',   label: 'Pinnacle factor',   type: 'number', min: 0.00, max: 1.00, step: 0.05, default: 0.35 },
+      { id: 'asymmetry',  label: 'Asymmetry',         type: 'number', min: 0.00, max: 0.50, step: 0.02, default: 0.18 },
+      { id: 'aboveCount', label: 'Above shards',      type: 'int',    min: 2,    max: 8,    step: 1,    default: 5    },
+      { id: 'belowCount', label: 'Below shards',      type: 'int',    min: 3,    max: 8,    step: 1,    default: 5    },
+      { id: 'jaggedness', label: 'Jaggedness',        type: 'number', min: 0.00, max: 0.20, step: 0.005, default: 0.080 }
+    ],
+    build: function (rng, state, params) {
+      // Reference: glaciers calve into 6 main iceberg shapes (tabular,
+      // wedge, dome, pinnacle, drydock, block). About 90 % of the mass
+      // is submerged — the visible part is the asymmetric, jagged tip.
+      // We build the above- and below-water portions separately so they
+      // can be shaped independently, then smooth-merge them. Material
+      // id 1 (dense) below water, 2 (bright) above — the cutoff is at
+      // the actual ocean surface (y = -0.5), NOT y = 0.
+      //
+      // Everything is driven from `rng`, so changing the seed produces
+      // a completely different iceberg silhouette each time.
+      const WATER_Y = -0.5;
+      // A consistent lean direction for the whole berg — both above and
+      // below shards drift in the same direction so it reads as a
+      // single tilted form rather than two unrelated piles.
+      const leanDir = (rng() - 0.5) * 2; // -1..1
+      const leanAmt = params.asymmetry;
+      const aboveShards = [];
+      const aboveCount = params.aboveCount;
+      // Above-water: cluster of octahedral and conical shards stacked
+      // somewhat asymmetrically. Higher shards get smaller and have a
+      // chance to be tall thin "pinnacles" rather than chunky blocks.
+      for (let i = 0; i < aboveCount; i++) {
+        const t = aboveCount <= 1 ? 0.5 : i / (aboveCount - 1);
+        // x position drifts in the lean direction toward the top.
+        const cx = leanDir * leanAmt * (t * 0.8 + 0.2) +
+                   (rng() - 0.5) * params.aboveSize * 0.55;
+        // y rises from just above the water line to a peak.
+        const baseHeight = WATER_Y + 0.05;
+        const cy = baseHeight + t * params.aboveSize * 1.4 +
+                   (rng() - 0.5) * 0.08;
+        const cz = (rng() - 0.5) * params.aboveSize * 0.35;
+        // Higher = smaller, occasionally pinnacled.
+        const sz = (0.55 - t * 0.30) * params.aboveSize *
+                   (0.65 + rng() * 0.45);
+        const isPinnacle = (t > 0.45) && (rng() < params.pinnacle);
+        if (isPinnacle) {
+          // Tall thin cone, apex up.
+          const peak = cy + sz * 1.4;
+          const baseY = cy - sz * 0.2;
+          aboveShards.push(makeConeY(cx, peak, baseY, cz, sz * 0.55));
+        } else {
+          // Random-rotated octahedron — breaks the regular pyramid grid.
+          let o = makeOctahedron(0, 0, 0, sz);
+          o = rotateY(o, rng() * Math.PI * 2);
+          o = rotateX(o, (rng() - 0.5) * 0.6);
+          o = rotateZ(o, (rng() - 0.5) * 0.6);
+          o = translate(o, cx, cy, cz);
+          aboveShards.push(o);
+        }
       }
-    };
+      // Below-water: wider, lower mass. Centred slightly opposite the
+      // above-water lean (the bulk of the iceberg counterweights the tip)
+      // and scattered laterally far enough to give the silhouette a wide
+      // base where it intersects the water plane.
+      const belowShards = [];
+      const belowCount = params.belowCount;
+      for (let i = 0; i < belowCount; i++) {
+        const cx = -leanDir * leanAmt * 0.4 +
+                   (rng() - 0.5) * params.belowSize * 1.0;
+        const cy = WATER_Y - 0.10 - rng() * params.belowSize * 0.55;
+        const cz = (rng() - 0.5) * params.belowSize * 0.45;
+        const sz = (0.35 + rng() * 0.35) * params.belowSize;
+        let o = makeOctahedron(0, 0, 0, sz);
+        o = rotateY(o, rng() * Math.PI * 2);
+        o = rotateX(o, (rng() - 0.5) * 0.5);
+        o = translate(o, cx, cy, cz);
+        belowShards.push(o);
+      }
+      // Smooth-min the two clusters so the iceberg reads as a single
+      // mass with a continuous waterline rather than two stacks.
+      let berg = sdfUnion(aboveShards.concat(belowShards), 0.18);
+      // Surface jaggedness — three octaves of noise. The mid + fine
+      // octaves break up the diamond facets; the big octave shapes
+      // overall folds in the silhouette.
+      if (params.jaggedness > 0) {
+        const n3 = makeNoise3D(state.seed + ':icebergNoise');
+        berg = displace(berg, function (x, y, z) {
+          return 0.50 * n3(x *  5, y *  5, z *  5) +
+                 0.30 * n3(x * 14, y * 14, z * 14) +
+                 0.20 * n3(x * 32, y * 32, z * 32);
+        }, params.jaggedness);
+      }
+      return {
+        sdf: berg,
+        // Material cutoff is the WATER LINE (y = GROUND_Y = -0.5), not
+        // y = 0 — the old version was darkening everything above the
+        // horizon line, including the bright above-water ice.
+        materialFn: function (x, y, z) {
+          return y > WATER_Y ? 2 : 1; // 2 = bright ice, 1 = dense/dark
+        }
+      };
+    }
   },
   lighthouseIsland: function (rng, state) {
     // Lighthouse perched on a rocky island. Tune Sky style and Ground
