@@ -3823,11 +3823,11 @@ function generateHatches(state, buf) {
 function generateCellHatches(state, buf) {
   const paths = [];
   const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
-  // Each cell holds up to 18 hatch slots (was 6) — cells are 3× larger
-  // on each axis, so the cell becomes a chunky halftone block that
-  // packs a much wider tonal range internally (18 discrete levels per
-  // cell instead of 6).
-  const maxHatches = 18;
+  // Much finer cell grid — each cell holds 4 hatch slots (was 18), so
+  // cells are 4.5× smaller on each axis ≈ ~20× more cells per page.
+  // Tonal range per cell drops to 4 discrete levels but the halftone
+  // RESOLUTION is dramatically finer, which is what was wanted.
+  const maxHatches = 4;
   const cellSize = baseSpacing * maxHatches;
   const cellsX = Math.max(2, Math.round((SX_MAX - SX_MIN) / cellSize));
   const actualCellSize = (SX_MAX - SX_MIN) / cellsX;
@@ -3960,13 +3960,26 @@ function generateCrosshatchHatches(state, buf) {
   const worldStep = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
   const sampleStep = Math.max(0.0015, worldStep * 0.35);
   const RANGE = 1.8;
-  const angles = [0, Math.PI / 2];
-  const crossThreshold = 0.40;
-  for (let a = 0; a < angles.length; a++) {
-    const ang = angles[a];
-    const ca = Math.cos(ang), sa = Math.sin(ang);
-    const phase = (a % 2) * worldStep * 0.5;
-    for (let s = -RANGE + phase; s <= RANGE; s += worldStep) {
+  // Four-level threshold-based crosshatch. Each layer adds another set
+  // of strokes in progressively darker regions, so the user sees
+  // continuous tonal variation instead of a single bright/dark split.
+  //
+  //   Layer 0: primary H lines    (always — bright surface = level 1)
+  //   Layer 1: secondary H lines  (darkness > 0.30 — level 2)
+  //   Layer 2: primary V lines    (darkness > 0.50 — level 3)
+  //   Layer 3: secondary V lines  (darkness > 0.70 — level 4)
+  //
+  // Secondary H/V are offset by half a worldStep so they interleave
+  // with the primary lines, doubling local line density.
+  const layers = [
+    { ang: 0,           offset: 0,                threshold: -0.01 },
+    { ang: 0,           offset: worldStep * 0.5,  threshold: 0.30  },
+    { ang: Math.PI / 2, offset: 0,                threshold: 0.50  },
+    { ang: Math.PI / 2, offset: worldStep * 0.5,  threshold: 0.70  }
+  ];
+  for (const L of layers) {
+    const ca = Math.cos(L.ang), sa = Math.sin(L.ang);
+    for (let s = -RANGE + L.offset; s <= RANGE; s += worldStep) {
       const sx0 = -sa * s;
       const sy0 = ca * s;
       let inDraw = false;
@@ -3984,7 +3997,7 @@ function generateCrosshatchHatches(state, buf) {
                              0.50 * buf.shadow[idx] +
                              0.20 * (1 - buf.ao[idx]) +
                              materialDarknessShift(buf, idx);
-            draw = (a === 0) ? true : (darkness > crossThreshold);
+            draw = darkness > L.threshold;
           }
         }
         if (draw) {
@@ -4014,59 +4027,55 @@ function generateVerticalHatches(state, buf) {
   const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
   const sampleStep = baseSpacing * 0.4;
   const RANGE = 1.8;
-  // Primary pass — one vertical line every baseSpacing across the form.
-  for (let sx = -RANGE; sx <= RANGE; sx += baseSpacing) {
-    let inDraw = false;
-    let sy0 = 0, lastY = 0;
-    for (let sy = SY_MIN; sy <= SY_MAX; sy += sampleStep) {
-      const idx = bufIdx(buf, sx, sy);
-      const draw = (idx >= 0 && buf.surface[idx] === 1);
-      if (draw) {
-        if (!inDraw) { sy0 = sy; inDraw = true; }
-        lastY = sy;
-      } else if (inDraw) {
-        if (Math.abs(lastY - sy0) > baseSpacing * 0.4) {
+  // Four-level vertical hatching. Each level is a separate set of
+  // columns at an OFFSET position so the layers interleave on the page.
+  //
+  //   Layer 0:  offset 0       always (level 1)
+  //   Layer 1:  offset 0.5     darkness > 0.30 (level 2 — 2× density)
+  //   Layer 2:  offset 0.25    darkness > 0.55 (level 3 — 3× density)
+  //   Layer 3:  offset 0.75    darkness > 0.75 (level 4 — 4× density)
+  //
+  // All offsets are fractions of baseSpacing, so the four sub-grids
+  // interleave to give true tonal variation across light → dark.
+  const layers = [
+    { offset: 0.00 * baseSpacing, threshold: -0.01 },
+    { offset: 0.50 * baseSpacing, threshold: 0.30  },
+    { offset: 0.25 * baseSpacing, threshold: 0.55  },
+    { offset: 0.75 * baseSpacing, threshold: 0.75  }
+  ];
+  for (const L of layers) {
+    for (let sx = -RANGE + L.offset; sx <= RANGE; sx += baseSpacing) {
+      let inDraw = false;
+      let sy0 = 0, lastY = 0;
+      function flush() {
+        if (inDraw && Math.abs(lastY - sy0) > baseSpacing * 0.4) {
           paths.push([[sx, sy0], [sx, lastY]]);
         }
         inDraw = false;
       }
-    }
-    if (inDraw && Math.abs(lastY - sy0) > baseSpacing * 0.4) {
-      paths.push([[sx, sy0], [sx, lastY]]);
-    }
-  }
-  // Secondary pass — half-step columns, but each scan-line segment only
-  // draws where the surface is darker than the threshold. Effectively
-  // doubles the vertical-line density in shadowed regions, giving the
-  // engraving the tone variation that the single-pass version lacks.
-  const darkThreshold = 0.40;
-  for (let sx = -RANGE + baseSpacing * 0.5; sx <= RANGE; sx += baseSpacing) {
-    let inDraw = false;
-    let sy0 = 0, lastY = 0;
-    function flush() {
-      if (inDraw && Math.abs(lastY - sy0) > baseSpacing * 0.4) {
-        paths.push([[sx, sy0], [sx, lastY]]);
+      for (let sy = SY_MIN; sy <= SY_MAX; sy += sampleStep) {
+        const idx = bufIdx(buf, sx, sy);
+        let draw = false;
+        if (idx >= 0 && buf.surface[idx] === 1) {
+          if (L.threshold < 0) {
+            draw = true;
+          } else {
+            const dark = (1 - buf.light[idx]) +
+                         0.50 * buf.shadow[idx] +
+                         0.20 * (1 - buf.ao[idx]) +
+                         materialDarknessShift(buf, idx);
+            draw = dark > L.threshold;
+          }
+        }
+        if (draw) {
+          if (!inDraw) { sy0 = sy; inDraw = true; }
+          lastY = sy;
+        } else if (inDraw) {
+          flush();
+        }
       }
-      inDraw = false;
+      flush();
     }
-    for (let sy = SY_MIN; sy <= SY_MAX; sy += sampleStep) {
-      const idx = bufIdx(buf, sx, sy);
-      let draw = false;
-      if (idx >= 0 && buf.surface[idx] === 1) {
-        const dark = (1 - buf.light[idx]) +
-                     0.50 * buf.shadow[idx] +
-                     0.20 * (1 - buf.ao[idx]) +
-                     materialDarknessShift(buf, idx);
-        draw = dark > darkThreshold;
-      }
-      if (draw) {
-        if (!inDraw) { sy0 = sy; inDraw = true; }
-        lastY = sy;
-      } else if (inDraw) {
-        flush();
-      }
-    }
-    flush();
   }
   return paths;
 }
