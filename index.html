@@ -53,7 +53,6 @@
         <option value="cairn">Cairn</option>
         <option value="iceberg">Iceberg</option>
         <option value="pyramid">Pyramid</option>
-        <option value="lighthouseIsland">Lighthouse island</option>
         <option value="twistedColumn">Twisted column</option>
         <option value="recursiveTower">Recursive tower</option>
         <option value="ufo">UFO saucer</option>
@@ -1482,31 +1481,6 @@ const SCENES = {
         }
       };
     }
-  },
-  lighthouseIsland: function (rng, state) {
-    // Lighthouse perched on a rocky island. Tune Sky style and Ground
-    // style to taste — "Waves" ground is the intended pairing.
-    const island = makeBlobSDFAt(rng, {
-      center: [0, 0, 0],
-      nSpheres: 4,
-      smoothK: 0.4,
-      spread: 1.3,
-      verticality: 0.6,
-      pointiness: 0.4,
-      scale: 0.5
-    });
-    // Tower sits on the island's crest. Slightly off-centred horizontally
-    // for compositional asymmetry.
-    const body = makeCylinderY(-0.06, 0.20,  0.78, 0, 0.12);
-    const lamp = makeCylinderY(-0.06, 0.78,  0.94, 0, 0.17);
-    const roof = makeSphere(-0.06, 1.02, 0, 0.13);
-    const tower = sdfUnion([body, lamp, roof], 0.04);
-    return {
-      sdf: sdfUnion([island, tower], 0),
-      extraStrokes: function (ctx) {
-        return lighthouseBeam(ctx, [-0.06, 0.86, 0]);
-      }
-    };
   },
   forest: function (rng, state) {
     // Cluster of tapered trees. Each tree = thin trunk + canopy blob.
