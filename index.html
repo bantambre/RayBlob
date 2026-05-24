@@ -3823,11 +3823,11 @@ function generateHatches(state, buf) {
 function generateCellHatches(state, buf) {
   const paths = [];
   const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
-  // Much finer cell grid — each cell holds 4 hatch slots (was 18), so
-  // cells are 4.5× smaller on each axis ≈ ~20× more cells per page.
-  // Tonal range per cell drops to 4 discrete levels but the halftone
-  // RESOLUTION is dramatically finer, which is what was wanted.
-  const maxHatches = 4;
+  // Cell grid: maxHatches 4 → 3 makes cells ~25% smaller on each side
+  // (≈ 1.8× more cells per page area, roughly 'twice as dense'). Each
+  // cell now resolves 3 tonal levels but they interact spatially so
+  // the overall halftone reads finer.
+  const maxHatches = 3;
   const cellSize = baseSpacing * maxHatches;
   const cellsX = Math.max(2, Math.round((SX_MAX - SX_MIN) / cellSize));
   const actualCellSize = (SX_MAX - SX_MIN) / cellsX;
@@ -3855,8 +3855,9 @@ function generateCellHatches(state, buf) {
       }
       if (count === 0) continue;
       const avg = total / count;
-      const numHatches = Math.floor((1 - avg) * maxHatches);
-      if (numHatches === 0) continue;
+      // Even the brightest cell on the blob gets ONE line so highlights
+      // read as the first hatch level rather than pure white paper.
+      const numHatches = Math.max(1, Math.floor((1 - avg) * maxHatches + 0.5));
       for (let i = 0; i < numHatches; i++) {
         const slotIdx = Math.round((i + 1) * (maxHatches / (numHatches + 1))) - 1;
         if (slotIdx < 0 || slotIdx >= maxHatches) continue;
