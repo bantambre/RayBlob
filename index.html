@@ -3274,7 +3274,10 @@ function generateHatches(state, buf) {
 function generateCellHatches(state, buf) {
   const paths = [];
   const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
-  const maxHatches = 12;
+  // Smaller cells (6 lines per cell instead of 12) so the brightness
+  // halftone resolution is roughly 4× finer per page area. Cell height
+  // still fits exactly maxHatches lines at the active line spacing.
+  const maxHatches = 6;
   const cellSize = baseSpacing * maxHatches;
   const cellsX = Math.max(2, Math.round((SX_MAX - SX_MIN) / cellSize));
   const actualCellSize = (SX_MAX - SX_MIN) / cellsX;
@@ -3344,10 +3347,12 @@ function generateMonetHatches(state, buf) {
   const paths = [];
   const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
   const strokeLen = baseSpacing * 7;
-  const seedStep = baseSpacing * 0.9;
+  // Seeds spaced 1.4× line spacing (was 0.9×) so the foreground stroke
+  // population is much sparser by default. Density still scales with
+  // darkness via the probabilistic dropout test below.
+  const seedStep = baseSpacing * 1.4;
   const wobbleAmp = baseSpacing * 0.45;
   const dirNoise = makeNoise2D(state.seed + ':monetDir');
-  // Cheap deterministic hash for the per-seed dropout test.
   function hash01(sx, sy) {
     const h = Math.sin(sx * 1234.5 + sy * 5678.9 + 0.137) * 43758.5;
     return h - Math.floor(h);
@@ -3362,9 +3367,10 @@ function generateMonetHatches(state, buf) {
         0.20 * (1 - buf.ao[idx]) +
         materialDarknessShift(buf, idx)
       ));
-      // Probability of placing a stroke ∝ darkness. The 1.4 multiplier
-      // ensures dark regions reliably fire while mid-tones thin out.
-      if (hash01(sx, sy) > darkness * 1.4) continue;
+      // Probability of placing a stroke = darkness^1.8 — a steeper
+      // exponent than the old linear curve so mid-tones thin out fast
+      // while only the genuinely dark regions stay densely stroked.
+      if (hash01(sx, sy) > Math.pow(darkness, 1.8)) continue;
       const nx = buf.nx[idx], ny = buf.ny[idx];
       let dirX = -ny, dirY = nx;
       const m = Math.hypot(dirX, dirY);
@@ -3458,6 +3464,7 @@ function generateVerticalHatches(state, buf) {
   const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
   const sampleStep = baseSpacing * 0.4;
   const RANGE = 1.8;
+  // Primary pass — one vertical line every baseSpacing across the form.
   for (let sx = -RANGE; sx <= RANGE; sx += baseSpacing) {
     let inDraw = false;
     let sy0 = 0, lastY = 0;
@@ -3477,6 +3484,39 @@ function generateVerticalHatches(state, buf) {
     if (inDraw && Math.abs(lastY - sy0) > baseSpacing * 0.4) {
       paths.push([[sx, sy0], [sx, lastY]]);
     }
+  }
+  // Secondary pass — half-step columns, but each scan-line segment only
+  // draws where the surface is darker than the threshold. Effectively
+  // doubles the vertical-line density in shadowed regions, giving the
+  // engraving the tone variation that the single-pass version lacks.
+  const darkThreshold = 0.40;
+  for (let sx = -RANGE + baseSpacing * 0.5; sx <= RANGE; sx += baseSpacing) {
+    let inDraw = false;
+    let sy0 = 0, lastY = 0;
+    function flush() {
+      if (inDraw && Math.abs(lastY - sy0) > baseSpacing * 0.4) {
+        paths.push([[sx, sy0], [sx, lastY]]);
+      }
+      inDraw = false;
+    }
+    for (let sy = SY_MIN; sy <= SY_MAX; sy += sampleStep) {
+      const idx = bufIdx(buf, sx, sy);
+      let draw = false;
+      if (idx >= 0 && buf.surface[idx] === 1) {
+        const dark = (1 - buf.light[idx]) +
+                     0.50 * buf.shadow[idx] +
+                     0.20 * (1 - buf.ao[idx]) +
+                     materialDarknessShift(buf, idx);
+        draw = dark > darkThreshold;
+      }
+      if (draw) {
+        if (!inDraw) { sy0 = sy; inDraw = true; }
+        lastY = sy;
+      } else if (inDraw) {
+        flush();
+      }
+    }
+    flush();
   }
   return paths;
 }
@@ -3716,33 +3756,32 @@ function generateCurveHatches(state, buf, fieldFn) {
     }
   }
 
-  // Crosshatch pass: in dark / shadowed regions, lay down a second set
-  // of streamlines perpendicular to the field so unlit areas read darker.
-  // Skip for isoDepth since perpendicular iso-depth is iso-screen-x which
-  // is not a meaningful contour.
-  if (fieldFn !== fieldIsoDepth) {
+  // Densification pass: in dark / shadowed regions, lay down a SECOND
+  // set of streamlines following the SAME field as the main pass, with
+  // offset seeds at roughly half the main stride. The new strokes weave
+  // BETWEEN the main strokes — engraving-style shading where dark areas
+  // simply have more contour lines, instead of a perpendicular grid.
+  // Applies to all curve modes uniformly (iso-depth, projNormal, principal).
+  {
     const occ2 = new Uint8Array(W * H);
-    const darkThreshold = 0.55;
-    function fieldPerp(buf, ix, iy) {
-      const f = fieldFn(buf, ix, iy);
-      if (!f) return null;
-      return [-f[1], f[0]];
-    }
+    const darkThreshold = 0.45;
+    const sepPx2 = Math.max(2, Math.floor(spacingPx * 0.55));
+    const sepSqr2 = sepPx2 * sepPx2;
     function isFreeSeed2(px, py) {
       const ix = Math.round(px), iy = Math.round(py);
       if (ix < 0 || ix >= W || iy < 0 || iy >= H) return false;
       if (buf.surface[iy * W + ix] !== 1) return false;
       const i = iy * W + ix;
-      const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] + 0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
+      const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] +
+                   0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
       if (dark < darkThreshold) return false;
-      const r = spacingPx;
-      const x0 = Math.max(0, ix - r), x1 = Math.min(W - 1, ix + r);
-      const y0 = Math.max(0, iy - r), y1 = Math.min(H - 1, iy + r);
+      const x0 = Math.max(0, ix - sepPx2), x1 = Math.min(W - 1, ix + sepPx2);
+      const y0 = Math.max(0, iy - sepPx2), y1 = Math.min(H - 1, iy + sepPx2);
       for (let y = y0; y <= y1; y++) {
         const dy = y - iy;
         for (let x = x0; x <= x1; x++) {
           const dx = x - ix;
-          if (dx * dx + dy * dy > sepSqr) continue;
+          if (dx * dx + dy * dy > sepSqr2) continue;
           if (occ2[y * W + x]) return false;
         }
       }
@@ -3757,9 +3796,12 @@ function generateCurveHatches(state, buf, fieldFn) {
         if (ix < 0 || ix >= W || iy < 0 || iy >= H) break;
         if (buf.surface[iy * W + ix] !== 1) break;
         const i = iy * W + ix;
-        const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] + 0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
+        const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] +
+                     0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
+        // Allow trace to extend slightly past the threshold so lines
+        // taper naturally into lit regions instead of stopping abruptly.
         if (dark < darkThreshold - 0.10) break;
-        const f = fieldPerp(buf, ix, iy);
+        const f = fieldFn(buf, ix, iy);
         if (!f) break;
         let dx = f[0] * dirSign;
         let dy = f[1] * dirSign;
@@ -3768,7 +3810,7 @@ function generateCurveHatches(state, buf, fieldFn) {
         py += dy * stepPx;
         lastDx = dx; lastDy = dy;
         stepsSinceSeed++;
-        if (stepsSinceSeed > spacingPx * 0.6) {
+        if (stepsSinceSeed > sepPx2 * 0.6) {
           const px2 = Math.round(px), py2 = Math.round(py);
           if (px2 < 0 || px2 >= W || py2 < 0 || py2 >= H) break;
           if (occ2[py2 * W + px2]) break;
@@ -3777,8 +3819,10 @@ function generateCurveHatches(state, buf, fieldFn) {
       }
       return points;
     }
-    for (let py = 1; py < H - 1; py += seedStride) {
-      for (let px = 1; px < W - 1; px += seedStride) {
+    const seedStride2 = sepPx2;
+    const seedOffset  = Math.floor(seedStride2 / 2);
+    for (let py = seedOffset; py < H - 1; py += seedStride2) {
+      for (let px = seedOffset; px < W - 1; px += seedStride2) {
         const idx = py * W + px;
         if (buf.surface[idx] !== 1) continue;
         if (!isFreeSeed2(px, py)) continue;
