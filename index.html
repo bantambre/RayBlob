@@ -1400,7 +1400,7 @@ const SCENES = {
       { id: 'halfSide',     label: 'Base half-side', type: 'number', min: 0.30, max: 1.20, step: 0.05, default: 0.70 },
       { id: 'height',       label: 'Height',         type: 'number', min: 0.80, max: 2.20, step: 0.05, default: 1.45 },
       { id: 'yawDeg',       label: 'Yaw (°)',        type: 'number', min: 0,    max: 45,   step: 1,    default: 25   },
-      { id: 'tiltDeg',      label: 'Cam tilt (°)',   type: 'number', min: 0,    max: 20,   step: 0.5,  default: 9    },
+      { id: 'tiltDeg',      label: 'Cam tilt (°)',   type: 'number', min: 0,    max: 20,   step: 0.5,  default: 6    },
       { id: 'jaggedness',   label: 'Surface noise',  type: 'number', min: 0.00, max: 0.10, step: 0.005, default: 0.015 }
     ],
     build: function (rng, state, params) {
@@ -1614,23 +1614,32 @@ const SCENES = {
     // Menger sponge level 1: 3x3x3 grid of unit cubes with the seven
     // "center" cubes removed (body center + 6 face centers). A cube
     // is removed if at least two of its three index coordinates are 1.
+    //
+    // Sponge is anchored so its BOTTOM sits roughly at the horizon
+    // (y = -0.5) — same compositional level as the other scenes — and
+    // camTilt matches the default (6°) so the horizon line lines up
+    // with the rest of the gallery.
     const parts = [];
-    const half = 0.10;
+    const half = 0.12;
+    const step = 0.24;
+    // y centres: -0.18, 0.06, 0.30 → cube y-extents −0.30..+0.42.
+    // Bottom of the sponge sits 0.20 above the horizon, comfortably
+    // above the foreground.
     for (let ix = 0; ix < 3; ix++) {
       for (let iy = 0; iy < 3; iy++) {
         for (let iz = 0; iz < 3; iz++) {
           const centerCount = (ix === 1 ? 1 : 0) + (iy === 1 ? 1 : 0) + (iz === 1 ? 1 : 0);
           if (centerCount >= 2) continue;
           parts.push(makeBox(
-            -0.30 + ix * 0.20,
-            -0.30 + iy * 0.20,
-            -0.30 + iz * 0.20,
-            half, half, half, 0.005
+            -step + ix * step,
+            -0.18 + iy * step,
+            -step + iz * step,
+            half, half, half, 0.006
           ));
         }
       }
     }
-    return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 14, yawDeg: 28 } };
+    return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 6, yawDeg: 28 } };
   },
   mobius: function (rng, state) {
     // 32 thin flat band segments around a loop, each rotated around its
@@ -3957,18 +3966,25 @@ function generateGroundWaves(state, buf) {
 function generateGroundShadows(state, buf) {
   const paths = [];
   if (syHorizon <= SY_MIN) return paths;
-  const spacing = state.lw * state.density * WORLD_PER_MM * 1.4;
-  const dashLen = spacing * 0.55;
-  for (let sy = SY_MIN + 0.01; sy < syHorizon - 0.005; sy += spacing * 0.7) {
-    for (let sx = SX_MIN + 0.01; sx <= SX_MAX - 0.01; sx += spacing * 1.05) {
+  const spacing = state.lw * state.density * WORLD_PER_MM;
+  const dashLen = spacing * 0.90;
+  // Cast-shadow density: dashes spaced about half the regular ground
+  // line spacing on each axis, so the cast shadow lays a dense crosshatch
+  // over the ground hatches rather than a sparse stipple. Dash length is
+  // modulated by the soft-shadow strength so the penumbra still falls
+  // off smoothly toward the umbra core.
+  const xStep = spacing * 0.55;
+  const yStep = spacing * 0.45;
+  for (let sy = SY_MIN + 0.01; sy < syHorizon - 0.005; sy += yStep) {
+    for (let sx = SX_MIN + 0.01; sx <= SX_MAX - 0.01; sx += xStep) {
       const idx = bufIdx(buf, sx, sy);
-      // Only place a dash where the soft shadow is at least half-strength —
-      // avoids stippling weak penumbra regions and keeps the cast-shadow
-      // outline crisp on the ground.
-      if (idx < 0 || buf.surface[idx] !== 2 || buf.shadow[idx] < 0.40) continue;
+      if (idx < 0 || buf.surface[idx] !== 2) continue;
+      const s = buf.shadow[idx];
+      if (s < 0.40) continue;
+      const len = dashLen * (0.6 + 0.4 * s);
       paths.push([
-        [sx, sy - dashLen / 2],
-        [sx, sy + dashLen / 2]
+        [sx, sy - len / 2],
+        [sx, sy + len / 2]
       ]);
     }
   }
