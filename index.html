@@ -1625,19 +1625,82 @@ const SCENES = {
     }
     return sdfUnion(items, 0);
   },
-  volcano: function (rng, state) {
-    // Wide cone with a rising smoke plume of stacked spheres twisted
-    // around the y axis for organic motion.
-    const body = makeConeY(0, 0.05, -0.7, 0, 0.65);
-    const plume = stack(function (i) {
-      const y = 0.05 + i * 0.13;
-      const r = 0.10 + i * 0.04;
-      const dx = (rng() - 0.5) * 0.06;
-      const dz = (rng() - 0.5) * 0.04;
-      return makeSphere(dx, y, dz, r);
-    }, 6, 0.10);
-    const twistedPlume = twistY(plume, 1.6);
-    return sdfUnion([body, twistedPlume], 0.08);
+  volcano: {
+    ui: [
+      { id: 'mountainRadius', label: 'Mountain radius', type: 'number', min: 0.50, max: 1.80, step: 0.05, default: 1.20 },
+      { id: 'mountainHeight', label: 'Mountain height',type: 'number', min: 0.30, max: 1.20, step: 0.05, default: 0.60 },
+      { id: 'mountainNoise',  label: 'Slope noise',    type: 'number', min: 0.00, max: 0.12, step: 0.005, default: 0.030 },
+      { id: 'smokeHeight',    label: 'Smoke height',   type: 'number', min: 0.40, max: 1.50, step: 0.05, default: 1.10 },
+      { id: 'smokeBaseR',     label: 'Smoke base r',   type: 'number', min: 0.03, max: 0.15, step: 0.01, default: 0.07 },
+      { id: 'smokeTaper',     label: 'Smoke taper',    type: 'number', min: 0.10, max: 1.20, step: 0.05, default: 0.55 },
+      { id: 'smokeDrift',     label: 'Smoke drift',    type: 'number', min: 0.00, max: 0.35, step: 0.02, default: 0.18 },
+      { id: 'smokeWisps',     label: 'Smoke pieces',   type: 'int',    min: 4,    max: 14,   step: 1,    default: 9    },
+      { id: 'smokeBreakup',   label: 'Smoke breakup',  type: 'number', min: 0.00, max: 0.08, step: 0.005, default: 0.030 }
+    ],
+    build: function (rng, state, params) {
+      // Stratovolcano — wide conical mountain with a tall wispy plume
+      // rising from the summit. The mountain is sized to dominate the
+      // frame (base extends across most of the page width, apex well
+      // above the horizon). The smoke is built from small spheres that
+      // TAPER as they rise, drift laterally with accumulating offset,
+      // and are smoothed lightly so individual puffs stay distinct
+      // (instead of forming one fat column). A noise displacement on
+      // top of the plume gives wispy irregular edges.
+      const horizonY = -0.50;
+      const apexY = horizonY + params.mountainHeight;
+      const baseY = horizonY - 0.15;        // base extends slightly below the visible ground
+      let mountain = makeConeY(0, apexY, baseY, 0, params.mountainRadius);
+      // Slight noise on the slopes so it doesn't read as a perfect
+      // geometric cone — adds erosion / weathering detail.
+      if (params.mountainNoise > 0) {
+        const n3m = makeNoise3D(state.seed + ':volcanoMountain');
+        mountain = displace(mountain, function (x, y, z) {
+          return 0.55 * n3m(x * 5,  y * 5,  z * 5) +
+                 0.30 * n3m(x * 14, y * 14, z * 14) +
+                 0.15 * n3m(x * 32, y * 32, z * 32);
+        }, params.mountainNoise);
+      }
+      // Build the smoke as small spheres along an upward path. Radius
+      // tapers from baseR at the bottom to baseR × smokeTaper at the top.
+      // Drift accumulates with t² so the plume curves more strongly higher up.
+      const smokeParts = [];
+      const N = params.smokeWisps;
+      // Smoke originates just above the mountain apex.
+      const smokeStartY = apexY - 0.02;
+      let accumDx = 0;
+      let accumDz = 0;
+      for (let i = 0; i < N; i++) {
+        const t = N <= 1 ? 0.5 : i / (N - 1);
+        const y = smokeStartY + t * params.smokeHeight;
+        // Per-step drift, weighted higher up.
+        const stepDrift = params.smokeDrift * (0.2 + t * 1.4);
+        accumDx += (rng() - 0.5) * stepDrift * 0.30;
+        accumDz += (rng() - 0.5) * stepDrift * 0.20;
+        const r = params.smokeBaseR *
+                  (1 - t * (1 - params.smokeTaper)) *
+                  (0.70 + rng() * 0.50);
+        smokeParts.push(makeSphere(accumDx, y, accumDz, r));
+      }
+      // Lighter smooth-min between puffs (0.04 instead of 0.10) so each
+      // puff still reads as its own bulge rather than melting into a
+      // continuous column.
+      let smoke = sdfUnion(smokeParts, 0.04);
+      // Gentle twist around y for natural curl as the plume rises.
+      smoke = twistY(smoke, 1.0);
+      // Surface breakup — high-frequency noise displacement creates the
+      // wispy ragged silhouette characteristic of real smoke plumes.
+      if (params.smokeBreakup > 0) {
+        const n3 = makeNoise3D(state.seed + ':volcanoSmoke');
+        smoke = displace(smoke, function (x, y, z) {
+          return 0.45 * n3(x *  8, y *  8, z *  8) +
+                 0.35 * n3(x * 20, y * 20, z * 20) +
+                 0.20 * n3(x * 45, y * 45, z * 45);
+        }, params.smokeBreakup);
+      }
+      // Sharp union between mountain and smoke so the silhouette change
+      // at the summit reads as 'rock ends, smoke starts'.
+      return sdfUnion([mountain, smoke], 0.03);
+    }
   },
   cathedralInterior: function (rng, state) {
     // Receding rows of columns flanking a central nave, plus a back wall
