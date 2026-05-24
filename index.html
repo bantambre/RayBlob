@@ -4334,18 +4334,24 @@ function generateCurveHatches(state, buf, fieldFn) {
     }
   }
 
-  // Densification pass: in dark / shadowed regions, lay down a SECOND
-  // set of streamlines following the SAME field as the main pass, with
-  // offset seeds at roughly half the main stride. The new strokes weave
-  // BETWEEN the main strokes — engraving-style shading where dark areas
-  // simply have more contour lines, instead of a perpendicular grid.
-  // Applies to all curve modes uniformly (iso-depth, projNormal, principal).
-  {
-    const occ2 = new Uint8Array(W * H);
-    const darkThreshold = 0.45;
-    const sepPx2 = Math.max(2, Math.floor(spacingPx * 0.55));
+  // Multi-level densification — 3 additional passes following the SAME
+  // field as the main pass, each weaving streamlines at progressively
+  // tighter spacing and gated by a progressively darker threshold.
+  // Combined with the main pass this gives 4 discrete tonal levels
+  // across the surface, applicable uniformly to iso-depth / projNormal
+  // / principal. A SHARED occupancy grid means each tighter layer
+  // fills in BETWEEN the previous layer's strokes.
+  const densificationLayers = [
+    { factor: 0.65, threshold: 0.30 },  // level 2
+    { factor: 0.45, threshold: 0.55 },  // level 3
+    { factor: 0.30, threshold: 0.75 }   // level 4
+  ];
+  const occ2 = new Uint8Array(W * H);
+  for (const layer of densificationLayers) {
+    const sepPx2 = Math.max(1.5, spacingPx * layer.factor);
     const sepSqr2 = sepPx2 * sepPx2;
-    function isFreeSeed2(px, py) {
+    const darkThreshold = layer.threshold;
+    const isFreeSeed2 = function (px, py) {
       const ix = Math.round(px), iy = Math.round(py);
       if (ix < 0 || ix >= W || iy < 0 || iy >= H) return false;
       if (buf.surface[iy * W + ix] !== 1) return false;
@@ -4353,8 +4359,9 @@ function generateCurveHatches(state, buf, fieldFn) {
       const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] +
                    0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
       if (dark < darkThreshold) return false;
-      const x0 = Math.max(0, ix - sepPx2), x1 = Math.min(W - 1, ix + sepPx2);
-      const y0 = Math.max(0, iy - sepPx2), y1 = Math.min(H - 1, iy + sepPx2);
+      const r = Math.ceil(sepPx2);
+      const x0 = Math.max(0, ix - r), x1 = Math.min(W - 1, ix + r);
+      const y0 = Math.max(0, iy - r), y1 = Math.min(H - 1, iy + r);
       for (let y = y0; y <= y1; y++) {
         const dy = y - iy;
         for (let x = x0; x <= x1; x++) {
@@ -4364,8 +4371,8 @@ function generateCurveHatches(state, buf, fieldFn) {
         }
       }
       return true;
-    }
-    function trace2(px, py, dirSign) {
+    };
+    const trace2 = function (px, py, dirSign) {
       const points = [[px, py]];
       let lastDx = 0, lastDy = 0;
       let stepsSinceSeed = 0;
@@ -4376,8 +4383,8 @@ function generateCurveHatches(state, buf, fieldFn) {
         const i = iy * W + ix;
         const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] +
                      0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
-        // Allow trace to extend slightly past the threshold so lines
-        // taper naturally into lit regions instead of stopping abruptly.
+        // Trace allowed to taper slightly past the threshold so lines
+        // end gracefully into lit regions.
         if (dark < darkThreshold - 0.10) break;
         const f = fieldFn(buf, ix, iy);
         if (!f) break;
@@ -4396,8 +4403,8 @@ function generateCurveHatches(state, buf, fieldFn) {
         points.push([px, py]);
       }
       return points;
-    }
-    const seedStride2 = sepPx2;
+    };
+    const seedStride2 = Math.max(2, Math.floor(sepPx2));
     const seedOffset  = Math.floor(seedStride2 / 2);
     for (let py = seedOffset; py < H - 1; py += seedStride2) {
       for (let px = seedOffset; px < W - 1; px += seedStride2) {
