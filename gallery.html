@@ -255,15 +255,36 @@ let stopFlag = false;
 function setStatus(s) { statusEl.textContent = s; }
 
 function rendererReady() {
-  return new Promise(function (resolve) {
+  return new Promise(function (resolve, reject) {
+    const start = Date.now();
     function check() {
-      if (iframe.contentWindow &&
-          typeof iframe.contentWindow.renderToSvgString === 'function' &&
-          typeof iframe.contentWindow.defaultState === 'function') {
-        resolve(iframe.contentWindow);
-      } else {
-        setTimeout(check, 80);
+      let win, hasRender, hasDefault;
+      try {
+        win = iframe.contentWindow;
+        hasRender = win && typeof win.renderToSvgString === 'function';
+        hasDefault = win && typeof win.defaultState === 'function';
+      } catch (e) {
+        // Cross-origin / sandboxing error — file:// can hit this.
+        reject(new Error('iframe access blocked: ' + e.message +
+          ' (try serving via a local http server: `python3 -m http.server` and ' +
+          'opening http://localhost:8000/gallery.html)'));
+        return;
       }
+      if (hasRender && hasDefault) {
+        resolve(win);
+        return;
+      }
+      if (Date.now() - start > 15000) {
+        const diag = 'contentWindow=' + (!!win) +
+                     ' renderToSvgString=' + (hasRender ? 'fn' : typeof (win && win.renderToSvgString)) +
+                     ' defaultState=' + (hasDefault ? 'fn' : typeof (win && win.defaultState));
+        reject(new Error('iframe never exposed renderer (' + diag +
+          '). The iframe URL is ' + iframe.src + '.'));
+        return;
+      }
+      setStatus('waiting for renderer iframe… (' +
+                Math.round((Date.now() - start) / 100) / 10 + 's)');
+      setTimeout(check, 100);
     }
     check();
   });
@@ -303,14 +324,25 @@ function urlFor(state) {
 
 async function run() {
   const matrixFn = MATRICES[matrixSel.value];
-  if (!matrixFn) return;
+  if (!matrixFn) { setStatus('unknown matrix'); return; }
   stopFlag = false;
   runBtn.disabled = true;
   stopBtn.disabled = false;
   setStatus('warming up…');
   const cases = matrixFn();
   grid.innerHTML = '';
-  const ren = await rendererReady();
+  let ren;
+  try {
+    ren = await rendererReady();
+  } catch (err) {
+    setStatus('renderer not ready: ' + err.message);
+    runBtn.disabled = false;
+    stopBtn.disabled = true;
+    grid.innerHTML = '<div class="card" style="grid-column: 1 / -1">' +
+                     '<div class="title">Renderer iframe failed to expose its functions</div>' +
+                     '<div class="meta">' + escapeHtml(err.message) + '</div></div>';
+    return;
+  }
   const baseState = Object.assign(ren.defaultState(), {
     seed: seedInput.value || '42',
     bufRes: parseInt(bufResInput.value, 10) || 300
