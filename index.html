@@ -4797,7 +4797,7 @@ function generateGroundSandGarden(state, buf) {
   // a radius equal to the blob's mean horizontal extent.
   const field = blobGroundDistanceField(buf);
   // Amplitude scales with line spacing so peaks stay near their own row.
-  const rippleAmp = maxDsy * 1.10 * (state.waviness || 1);
+  const rippleAmp = maxDsy * 1.10 * (state.waviness != null ? state.waviness : 1);
   const rippleFreq = state.rippleFreq != null ? state.rippleFreq : 7.0;
   let sy = SY_MIN;
   while (sy < syHorizon) {
@@ -4845,7 +4845,7 @@ function generateGroundWaves(state, buf) {
   // Amplitude is tied to line spacing so wavy lines stay near their
   // neighbours instead of crossing several rows. The waviness slider
   // scales it further.
-  const ampBase = maxDsy * 0.50 * (state.waviness || 1);
+  const ampBase = maxDsy * 0.50 * (state.waviness != null ? state.waviness : 1);
 
   let sy = SY_MIN;
   const stopAt = syHorizon;
@@ -4904,7 +4904,8 @@ function generateGroundShadows(state, buf) {
   // with the sand pattern instead of stippling a flat grid over it.
   const useSandGarden = (state.groundStyle === 'sandGarden');
   const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
-  const rippleAmp = useSandGarden ? maxDsy * 1.10 * (state.waviness || 1) : 0;
+  const wavinessVal = state.waviness != null ? state.waviness : 1;
+  const rippleAmp = useSandGarden ? maxDsy * 1.10 * wavinessVal : 0;
   const rippleFreq = state.rippleFreq != null ? state.rippleFreq : 7.0;
   const field = useSandGarden ? blobGroundDistanceField(buf) : null;
   for (let sy = SY_MIN + 0.01; sy < syHorizon - 0.005; sy += yStep) {
