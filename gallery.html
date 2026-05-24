@@ -254,32 +254,40 @@ let stopFlag = false;
 
 function setStatus(s) { statusEl.textContent = s; }
 
+// Renderer is driven by postMessage so it works under Chrome's strict
+// file:// same-origin policy (where direct cross-frame property access
+// is blocked). The iframe posts 'rayblob:ready' once its script loads.
+let rendererReadyResolved = false;
+const pendingRequests = {};
+let nextRequestId = 0;
+
+window.addEventListener('message', function (e) {
+  const data = e.data;
+  if (!data || typeof data !== 'object') return;
+  if (data.type === 'rayblob:ready') {
+    rendererReadyResolved = true;
+    return;
+  }
+  if (data.type === 'rayblob:result' ||
+      data.type === 'rayblob:defaultStateResult') {
+    const cb = pendingRequests[data.requestId];
+    if (!cb) return;
+    delete pendingRequests[data.requestId];
+    if (data.error) cb.reject(new Error(data.error));
+    else cb.resolve(data);
+  }
+});
+
 function rendererReady() {
   return new Promise(function (resolve, reject) {
     const start = Date.now();
     function check() {
-      let win, hasRender, hasDefault;
-      try {
-        win = iframe.contentWindow;
-        hasRender = win && typeof win.renderToSvgString === 'function';
-        hasDefault = win && typeof win.defaultState === 'function';
-      } catch (e) {
-        // Cross-origin / sandboxing error — file:// can hit this.
-        reject(new Error('iframe access blocked: ' + e.message +
-          ' (try serving via a local http server: `python3 -m http.server` and ' +
-          'opening http://localhost:8000/gallery.html)'));
-        return;
-      }
-      if (hasRender && hasDefault) {
-        resolve(win);
-        return;
-      }
+      if (rendererReadyResolved) { resolve(); return; }
       if (Date.now() - start > 15000) {
-        const diag = 'contentWindow=' + (!!win) +
-                     ' renderToSvgString=' + (hasRender ? 'fn' : typeof (win && win.renderToSvgString)) +
-                     ' defaultState=' + (hasDefault ? 'fn' : typeof (win && win.defaultState));
-        reject(new Error('iframe never exposed renderer (' + diag +
-          '). The iframe URL is ' + iframe.src + '.'));
+        reject(new Error(
+          "iframe never posted 'rayblob:ready'. The iframe src is " +
+          iframe.src + '. Open the browser console and check the iframe ' +
+          'for script errors.'));
         return;
       }
       setStatus('waiting for renderer iframe… (' +
@@ -287,6 +295,22 @@ function rendererReady() {
       setTimeout(check, 100);
     }
     check();
+  });
+}
+
+function callIframe(message) {
+  return new Promise(function (resolve, reject) {
+    const requestId = ++nextRequestId;
+    pendingRequests[requestId] = { resolve, reject };
+    iframe.contentWindow.postMessage(
+      Object.assign({ requestId: requestId }, message), '*');
+    // Bail if no response in 60 seconds.
+    setTimeout(function () {
+      if (pendingRequests[requestId]) {
+        delete pendingRequests[requestId];
+        reject(new Error('render request timed out'));
+      }
+    }, 60000);
   });
 }
 
@@ -331,19 +355,29 @@ async function run() {
   setStatus('warming up…');
   const cases = matrixFn();
   grid.innerHTML = '';
-  let ren;
   try {
-    ren = await rendererReady();
+    await rendererReady();
   } catch (err) {
     setStatus('renderer not ready: ' + err.message);
     runBtn.disabled = false;
     stopBtn.disabled = true;
     grid.innerHTML = '<div class="card" style="grid-column: 1 / -1">' +
-                     '<div class="title">Renderer iframe failed to expose its functions</div>' +
+                     '<div class="title">Renderer iframe never reported ready</div>' +
                      '<div class="meta">' + escapeHtml(err.message) + '</div></div>';
     return;
   }
-  const baseState = Object.assign(ren.defaultState(), {
+  // Fetch the renderer's default state via postMessage.
+  let baseDefault;
+  try {
+    const reply = await callIframe({ type: 'rayblob:defaultState' });
+    baseDefault = reply.state;
+  } catch (err) {
+    setStatus('failed to fetch default state: ' + err.message);
+    runBtn.disabled = false;
+    stopBtn.disabled = true;
+    return;
+  }
+  const baseState = Object.assign(baseDefault, {
     seed: seedInput.value || '42',
     bufRes: parseInt(bufResInput.value, 10) || 300
   });
@@ -360,12 +394,12 @@ async function run() {
     }
     let result;
     try {
-      // Let the browser breathe between renders so the UI stays responsive.
       await new Promise(function (r) { setTimeout(r, 0); });
       const t0 = performance.now();
-      result = ren.renderToSvgString(state);
+      const reply = await callIframe({ type: 'rayblob:render', state: state });
       const t1 = performance.now();
-      result.elapsedMs = Math.round(t1 - t0);
+      result = { svg: reply.svg, strokeCount: reply.strokeCount,
+                 elapsedMs: Math.round(t1 - t0) };
     } catch (err) {
       console.error(err);
       const card = document.createElement('div');

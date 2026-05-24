@@ -5221,6 +5221,52 @@ window.renderToSvgString = renderToSvgString;
 window.defaultState = defaultState;
 window.SCENES = SCENES;
 
+// postMessage bridge — the gallery page (or any parent) can drive the
+// renderer without needing direct property access. This works even when
+// the parent and iframe are 'cross-origin' under Chrome's strict file://
+// policy, where the direct path fails.
+//
+// Protocol:
+//   parent → iframe: { type: 'rayblob:render', requestId, state }
+//   iframe → parent: { type: 'rayblob:result', requestId,
+//                      svg, strokeCount }   or   { error }
+//
+//   parent → iframe: { type: 'rayblob:defaultState', requestId }
+//   iframe → parent: { type: 'rayblob:defaultStateResult', requestId,
+//                      state }
+//
+// On script-load the iframe posts 'rayblob:ready' to its parent so the
+// gallery can stop polling and start sending render requests.
+window.addEventListener('message', function (e) {
+  const data = e.data;
+  if (!data || typeof data !== 'object') return;
+  if (data.type === 'rayblob:render') {
+    try {
+      const result = renderToSvgString(data.state || {});
+      e.source.postMessage({
+        type: 'rayblob:result', requestId: data.requestId,
+        svg: result.svg, strokeCount: result.strokeCount
+      }, '*');
+    } catch (err) {
+      e.source.postMessage({
+        type: 'rayblob:result', requestId: data.requestId,
+        error: (err && err.message) || String(err)
+      }, '*');
+    }
+  } else if (data.type === 'rayblob:defaultState') {
+    e.source.postMessage({
+      type: 'rayblob:defaultStateResult', requestId: data.requestId,
+      state: defaultState()
+    }, '*');
+  }
+});
+// Announce readiness to the parent. The parent may not exist (when the
+// app is loaded directly) — postMessage to window.parent === window is
+// harmless.
+try {
+  window.parent.postMessage({ type: 'rayblob:ready' }, '*');
+} catch (e) { /* no parent */ }
+
 async function doRender() {
   const btn = document.getElementById('render');
   btn.disabled = true;
