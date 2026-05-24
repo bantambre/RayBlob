@@ -2494,11 +2494,53 @@ const SCENES = {
     }
     return displace(wall, striated, 0.08);
   },
-  tornado: function (rng, state) {
-    // Downward-apex cone (wide at top, point at ground), then twisted
-    // around y so the silhouette spirals — funnel cloud.
-    const funnel = makeConeY(0, -0.50, 0.55, 0, 0.22);
-    return twistY(funnel, 5.2);
+  tornado: {
+    ui: [
+      { id: 'funnelHeight', label: 'Funnel height', type: 'number', min: 0.60, max: 1.40, step: 0.05, default: 1.05 },
+      { id: 'baseRadius',   label: 'Top radius',    type: 'number', min: 0.10, max: 0.40, step: 0.02, default: 0.26 },
+      { id: 'twist',        label: 'Twist',         type: 'number', min: 2.0,  max: 12.0, step: 0.5,  default: 5.5  },
+      { id: 'debrisCount',  label: 'Ground debris', type: 'int',    min: 0,    max: 14,   step: 1,    default: 7    },
+      { id: 'flyingCount',  label: 'Flying objects',type: 'int',    min: 0,    max: 10,   step: 1,    default: 5    }
+    ],
+    build: function (rng, state, params) {
+      // Twisting funnel cloud + scattered ground debris + small flying
+      // objects swirling around the vortex. The debris and flying
+      // objects add narrative weight — the tornado is REACHING out and
+      // tearing things up, not just spinning in isolation.
+      const apexY = -0.55;
+      const topY = apexY + params.funnelHeight;
+      const funnel = makeConeY(0, apexY, topY, 0, params.baseRadius * 2.2);
+      const twisted = twistY(funnel, params.twist);
+      const parts = [twisted];
+      // Ground debris — small rotated boxes scattered across the plain.
+      for (let i = 0; i < params.debrisCount; i++) {
+        const x = (rng() - 0.5) * 1.7;
+        const z = (rng() - 0.5) * 0.6 - 0.05;
+        const w = 0.020 + rng() * 0.030;
+        const h = 0.012 + rng() * 0.018;
+        let d = makeBox(0, 0, 0, w, h, w * 0.7, 0.003);
+        d = rotateY(d, rng() * Math.PI * 2);
+        d = rotateZ(d, (rng() - 0.5) * 0.6);
+        d = translate(d, x, -0.50 + h, z);
+        parts.push(d);
+      }
+      // Flying objects swirling around the funnel at random heights.
+      for (let i = 0; i < params.flyingCount; i++) {
+        const heightFrac = 0.25 + rng() * 0.65;
+        const y = apexY + heightFrac * params.funnelHeight;
+        const angle = rng() * Math.PI * 2;
+        const radius = params.baseRadius * 2.2 * heightFrac * (1.3 + rng() * 0.5);
+        const x = Math.cos(angle) * radius;
+        const z = Math.sin(angle) * radius * 0.6;
+        const w = 0.018 + rng() * 0.025;
+        let obj = makeBox(0, 0, 0, w, w * 0.55, w * 0.5, 0.003);
+        obj = rotateY(obj, rng() * Math.PI * 2);
+        obj = rotateX(obj, rng() * Math.PI);
+        obj = translate(obj, x, y, z);
+        parts.push(obj);
+      }
+      return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 6 } };
+    }
   },
   mirroredForm: function (rng, state) {
     // A blob with its perfect reflection across the y=0 plane —
@@ -2515,22 +2557,84 @@ const SCENES = {
     });
     return mirror(subject, 'y');
   },
-  mountains: function (rng, state) {
-    // Three ridges at varied z depths and lateral offsets, soft-merged.
-    const ridges = stack(function (i) {
-      const z = -0.35 + i * 0.55;
-      const cx = (rng() - 0.5) * 0.4;
-      return makeBlobSDFAt(rng, {
-        center: [cx, -0.10 - i * 0.05, z],
-        nSpheres: 5,
-        smoothK: 0.4,
-        spread: 1.5,
-        verticality: 0.7,
-        pointiness: 0.6,
-        scale: 0.50 - i * 0.08
-      });
-    }, 3, 0.15);
-    return ridges;
+  mountains: {
+    ui: [
+      { id: 'peakCount',  label: 'Peaks',        type: 'int',    min: 3,    max: 8,    step: 1,    default: 5    },
+      { id: 'maxHeight',  label: 'Max height',   type: 'number', min: 0.40, max: 1.30, step: 0.05, default: 0.85 },
+      { id: 'baseRatio',  label: 'Base ratio',   type: 'number', min: 0.40, max: 1.20, step: 0.05, default: 0.65 },
+      { id: 'snowLine',   label: 'Snow line',    type: 'number', min: 0.00, max: 0.50, step: 0.02, default: 0.30 },
+      { id: 'roughness',  label: 'Roughness',    type: 'number', min: 0.00, max: 0.12, step: 0.005, default: 0.040 },
+      { id: 'foreground', label: 'Foreground',   type: 'enum',
+        options: [
+          { value: 'none',  label: 'none'  },
+          { value: 'tree',  label: 'tree'  },
+          { value: 'stone', label: 'stone' },
+          { value: 'cabin', label: 'cabin' }
+        ], default: 'tree' },
+      { id: 'foregroundSide', label: 'FG side', type: 'enum',
+        options: [{ value: 'left', label: 'left' }, { value: 'right', label: 'right' }], default: 'left' }
+    ],
+    build: function (rng, state, params) {
+      // Mountain range with POINTED peaks (cones), a foreground anchor
+      // (tree / stone / cabin) for scale and narrative, and an optional
+      // brighter 'snow line' near each peak's summit via materialFn.
+      const peakParts = [];
+      const N = params.peakCount;
+      for (let i = 0; i < N; i++) {
+        const t = N <= 1 ? 0.5 : i / (N - 1);
+        const x = (t - 0.5) * 1.7 + (rng() - 0.5) * 0.18;
+        const z = (rng() - 0.5) * 0.55 - 0.10;
+        const h = params.maxHeight * (0.55 + rng() * 0.45);
+        const baseR = h * params.baseRatio;
+        // Pointed cone: apex above horizon, base below for visual depth.
+        const peak = makeConeY(x, -0.50 + h, -0.60, z, baseR);
+        peakParts.push(peak);
+      }
+      let mountains = sdfUnion(peakParts, 0.20);
+      if (params.roughness > 0) {
+        const n3 = makeNoise3D(state.seed + ':mountains');
+        mountains = displace(mountains, function (x, y, z) {
+          return 0.55 * n3(x *  5, y *  5, z *  5) +
+                 0.30 * n3(x * 14, y * 14, z * 14) +
+                 0.15 * n3(x * 32, y * 32, z * 32);
+        }, params.roughness);
+      }
+      // Foreground anchor — gives scale to the distant peaks.
+      let foreground = null;
+      const fgX = (params.foregroundSide === 'left' ? -1 : 1) * 0.58;
+      const fgZ = -0.25;
+      if (params.foreground === 'tree') {
+        const trunk = makeCylinderY(fgX, -0.55, -0.25, fgZ, 0.020);
+        const canopy = makeConeY(fgX, 0.10, -0.30, fgZ, 0.13);
+        foreground = sdfUnion([trunk, canopy], 0.015);
+      } else if (params.foreground === 'stone') {
+        foreground = makeBlobSDFAt(rng, {
+          center: [fgX, -0.42, fgZ],
+          nSpheres: 4, smoothK: 0.08, spread: 0.35,
+          verticality: 0.9, pointiness: 0.25, scale: 0.20
+        });
+      } else if (params.foreground === 'cabin') {
+        const body = makeBox(fgX, -0.43, fgZ, 0.10, 0.07, 0.08, 0.012);
+        const roof = makeConeY(fgX, -0.27, -0.36, fgZ, 0.14);
+        const chimney = makeBox(fgX + 0.06, -0.30, fgZ - 0.02, 0.013, 0.05, 0.013, 0.003);
+        foreground = sdfUnion([body, roof, chimney], 0.012);
+      }
+      const sdf = foreground ? sdfUnion([mountains, foreground], 0) : mountains;
+      // Snow-line shading: above a per-peak threshold, mark material 6
+      // (very sparse / -0.45 darkness shift) so the summit reads
+      // visibly brighter than the slopes.
+      const snowYMin = -0.50 + params.maxHeight * (1 - params.snowLine);
+      return {
+        sdf: sdf,
+        camera: { tiltDeg: 6 },
+        materialFn: function (x, y, z) {
+          // Foreground keeps default material.
+          // Mountains above snow line read as bright snowcap.
+          if (y > snowYMin && params.snowLine > 0.02) return 6;
+          return 0;
+        }
+      };
+    }
   },
   stepwell: function (rng, state) {
     // Descending series of square boxes — widest at top, narrowing
@@ -4372,20 +4476,26 @@ function computeBlobDistanceTransform(buf) {
 // garden so the rings wrap around where the blob actually MEETS the
 // ground in 3D, not where it lands on the 2D screen.
 function blobGroundCentroid(buf) {
+  // Average the WORLD (x, z) coordinates of the actual blob hit points
+  // (using buf.depth, the per-pixel hit distance), not where the rays
+  // would land on the ground past the blob. The old version projected
+  // each blob pixel's ray downward to the ground plane, but blob pixels
+  // sit ABOVE the horizon — their rays go upward — so most samples were
+  // skipped and the few that remained projected far behind the blob.
   const W = buf.W, H = buf.H;
   let cxSum = 0, czSum = 0, cnt = 0;
   const stride = 4;
   for (let py = 0; py < H; py += stride) {
     for (let px = 0; px < W; px += stride) {
-      if (buf.surface[py * W + px] !== 1) continue;
+      const idx = py * W + px;
+      if (buf.surface[idx] !== 1) continue;
+      const t = buf.depth[idx];
+      if (t <= 0) continue;
       const sx = SX_MIN + (px / (W - 1)) * (SX_MAX - SX_MIN);
       const sy = SY_MAX - (py / (H - 1)) * (SY_MAX - SY_MIN);
       const r = castRay(sx, sy);
-      if (r[1] >= 0) continue;
-      const tg = (GROUND_Y - CAM[1]) / r[1];
-      if (tg <= 0) continue;
-      cxSum += CAM[0] + r[0] * tg;
-      czSum += CAM[2] + r[2] * tg;
+      cxSum += CAM[0] + r[0] * t;
+      czSum += CAM[2] + r[2] * t;
       cnt++;
     }
   }
