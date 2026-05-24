@@ -147,6 +147,7 @@
         <option value="arcs">Concentric arcs</option>
         <option value="stars">Stars</option>
         <option value="cellular">Cellular automata</option>
+        <option value="constellation">Constellation</option>
         <option value="none">None (empty sky)</option>
       </select>
     </div>
@@ -4790,9 +4791,14 @@ function generateGroundSandGarden(state, buf) {
   const paths = [];
   if (syHorizon <= SY_MIN) return paths;
   const sampleStep = 0.004;
-  const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
-  const minDsy = Math.max(state.lw * WORLD_PER_MM * 2.0, 0.006);
-  const fullRange = syHorizon - SY_MIN;
+  // SAND GARDEN uses a FLAT line spacing across the whole ground — not
+  // the d² perspective growth the regular ground uses. Perspective
+  // compression made the foreground much sparser than the horizon
+  // (10x larger steps) which left the foreground ripples illegible.
+  // Karesansui-style raked sand reads better with uniform line density
+  // anyway, so we just use the tight (minDsy) step everywhere.
+  const baseStep = Math.max(state.lw * WORLD_PER_MM * 2.0, 0.006);
+  const maxDsy = baseStep;  // amplitude reference — also the line spacing
   // World-space ring anchor — where the blob touches the ground, with
   // a radius equal to the blob's mean horizontal extent.
   const field = blobGroundDistanceField(buf);
@@ -4801,8 +4807,7 @@ function generateGroundSandGarden(state, buf) {
   const rippleFreq = state.rippleFreq != null ? state.rippleFreq : 7.0;
   let sy = SY_MIN;
   while (sy < syHorizon) {
-    const d = (syHorizon - sy) / fullRange;       // 1 at bottom → 0 at horizon
-    const step = minDsy + (maxDsy - minDsy) * d * d;
+    const step = baseStep;
     let polyline = [];
     function flush() {
       if (polyline.length >= 2) paths.push(polyline);
@@ -5031,6 +5036,67 @@ function generateStarSky(state, buf) {
       const d = size * 0.7;
       paths.push([[sx - d, sy - d], [sx + d, sy + d]]);
       paths.push([[sx - d, sy + d], [sx + d, sy - d]]);
+    }
+  }
+  return paths;
+}
+
+// Constellation sky — Poisson-scattered stars with thin lines connecting
+// some nearby pairs, forming a constellation pattern. Lines refuse to
+// cross blob silhouettes so the constellations don't slice through the
+// foreground subject.
+function generateSkyConstellation(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const rng = makeRng(state.seed + ':constellation');
+  const minDist = 0.06;
+  const pad = 0.04;
+  const candidates = poissonScatter(rng, minDist, {
+    xMin: SX_MIN + pad, xMax: SX_MAX - pad,
+    yMin: syHorizon + pad, yMax: SY_MAX - pad
+  }, 18);
+  // Keep only candidates that fall on actual sky pixels (not occluded
+  // by a blob in front).
+  const stars = [];
+  for (const [sx, sy] of candidates) {
+    const idx = bufIdx(buf, sx, sy);
+    if (idx < 0 || buf.surface[idx] === 0) stars.push([sx, sy]);
+  }
+  // Draw the stars themselves as small plus marks.
+  for (const [sx, sy] of stars) {
+    const size = 0.007 + rng() * 0.005;
+    paths.push([[sx - size, sy], [sx + size, sy]]);
+    paths.push([[sx, sy - size], [sx, sy + size]]);
+  }
+  // Connect a sparse subset of nearby pairs. Each star caps at maxConn
+  // connections so the network reads as constellations, not a graph.
+  const connectDist = 0.20;
+  const maxConn = 2;
+  const linkProb = 0.45;
+  const used = new Array(stars.length).fill(0);
+  for (let i = 0; i < stars.length; i++) {
+    if (used[i] >= maxConn) continue;
+    for (let j = i + 1; j < stars.length; j++) {
+      if (used[j] >= maxConn) continue;
+      const dx = stars[j][0] - stars[i][0];
+      const dy = stars[j][1] - stars[i][1];
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > connectDist || d < 0.03) continue;
+      if (rng() > linkProb) continue;
+      // Reject the line if it crosses a non-sky pixel (blob in front).
+      const segs = 10;
+      let blocked = false;
+      for (let k = 1; k < segs; k++) {
+        const t = k / segs;
+        const cx = stars[i][0] + dx * t;
+        const cy = stars[i][1] + dy * t;
+        const idx = bufIdx(buf, cx, cy);
+        if (idx >= 0 && buf.surface[idx] !== 0) { blocked = true; break; }
+      }
+      if (blocked) continue;
+      paths.push([stars[i].slice(), stars[j].slice()]);
+      used[i]++; used[j]++;
+      if (used[i] >= maxConn) break;
     }
   }
   return paths;
@@ -6150,6 +6216,7 @@ function renderToSvgString(state) {
     case 'arcs':          sky = generateSkyArcs(state, buf); break;
     case 'stars':         sky = generateStarSky(state, buf); break;
     case 'cellular':      sky = generateSkyCellular(state, buf); break;
+    case 'constellation': sky = generateSkyConstellation(state, buf); break;
     case 'none':          sky = []; break;
     case 'splotchy':      sky = generateCloudsSplotchy(state, buf); break;
     case 'clouds':        sky = generateSkyClouds(state, buf); break;
