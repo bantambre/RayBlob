@@ -68,15 +68,8 @@
         <option value="revolutionProfile">Revolution profile (urn)</option>
         <option value="hand">Hand</option>
         <option value="wireframeLattice">Wireframe lattice</option>
-        <option value="containerTower">Container tower</option>
-        <option value="floatingIsland">Floating island</option>
-        <option value="cargoShips">Cargo ships</option>
-        <option value="objectOnRails">Object on rails</option>
-        <option value="dustCloud">Dust cloud</option>
         <option value="eroded">Eroded structure</option>
         <option value="cliff">Cliff face</option>
-        <option value="tornado">Tornado</option>
-        <option value="mirroredForm">Mirrored form</option>
         <option value="mountains">Mountains</option>
         <option value="stepwell">Stepwell</option>
         <option value="smoke">Smoke column</option>
@@ -2657,7 +2650,7 @@ const SCENES = {
         parts.push(makeCapsuleZ(-step + ix * step, -step + iy * step, 0, step, r));
       }
     }
-    return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 18, yawDeg: 28 } };
+    return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 10, yawDeg: 22, distance: 3.5 } };
   },
   containerTower: function (rng, state) {
     // Stacked cargo containers, alternating left/right with slight
