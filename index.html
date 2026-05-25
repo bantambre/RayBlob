@@ -6068,7 +6068,10 @@ function renderToSvgString(state) {
     paths: paths,
     d: d,
     strokeVB: strokeVB,
-    strokeCount: paths.length + extraVB.length
+    strokeCount: paths.length + extraVB.length,
+    // True if the scene supplied its own camera, in which case the
+    // global Cam tilt slider had no effect on this render.
+    sceneOwnsCamera: sceneCamera !== null
   };
 }
 
@@ -6144,6 +6147,13 @@ async function doRender() {
     svg.style.height = '600px';
     svg.innerHTML = result.svg.replace(/^<svg[^>]*>|<\/svg>$/g, '');
     lastRender = { state, paths: result.paths, d: result.d, strokeVB: result.strokeVB };
+    // Grey out the global Cam tilt slider for scenes that supply their
+    // own camera (the scene-specific camera fully overrides state.camTilt).
+    const camTiltEl = document.getElementById('camTilt');
+    camTiltEl.disabled = !!result.sceneOwnsCamera;
+    camTiltEl.title = result.sceneOwnsCamera
+      ? 'Disabled — this scene defines its own camera angle'
+      : '';
     setStatus(
       result.strokeCount + ' strokes · ' + Math.round(t1 - t0) + 'ms\n' +
       'lw=' + state.lw + 'mm  spacing=' + (state.lw * state.density).toFixed(2) + 'mm'

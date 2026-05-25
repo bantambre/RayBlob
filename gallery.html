@@ -52,7 +52,7 @@
   <label>Seed</label>
   <input id="seed" type="text" value="42" style="width:80px">
   <label>Buffer res</label>
-  <input id="bufRes" type="number" min="150" max="800" step="50" value="300" style="width:70px">
+  <input id="bufRes" type="number" min="150" max="800" step="25" value="400" style="width:70px">
   <button id="run">Run</button>
   <button id="stop" disabled>Stop</button>
   <div id="status">idle</div>
@@ -397,10 +397,25 @@ async function run() {
     stopBtn.disabled = true;
     return;
   }
-  const baseState = Object.assign(baseDefault, {
+  // Object.assign({}, ...) — start fresh so leftover keys from a previous
+  // run don't leak into baseDefault (which is cached across runs).
+  const baseState = Object.assign({}, baseDefault, {
     seed: seedInput.value || '42',
-    bufRes: parseInt(bufResInput.value, 10) || 300
+    bufRes: parseInt(bufResInput.value, 10) || 400
   });
+
+  // Pre-create one placeholder card per case so the grid lays out once
+  // up front. Each card gets filled in as its render completes — no
+  // grid reflow during the run.
+  const cards = [];
+  for (let i = 0; i < cases.length; i++) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = '<div class="title">' + escapeHtml(cases[i].title) + '</div>' +
+                     '<div class="meta">rendering…</div>';
+    grid.appendChild(card);
+    cards.push(card);
+  }
 
   for (let i = 0; i < cases.length; i++) {
     if (stopFlag) break;
@@ -412,9 +427,10 @@ async function run() {
     if (c.state.sceneParams) {
       state.sceneParams = Object.assign({}, c.state.sceneParams);
     }
+    const card = cards[i];
+    const url = urlFor(state);
     let result;
     try {
-      await new Promise(function (r) { setTimeout(r, 0); });
       const t0 = performance.now();
       const reply = await callIframe({ type: 'rayblob:render', state: state });
       const t1 = performance.now();
@@ -422,16 +438,11 @@ async function run() {
                  elapsedMs: Math.round(t1 - t0) };
     } catch (err) {
       console.error(err);
-      const card = document.createElement('div');
-      card.className = 'card';
       card.innerHTML = '<div class="title">' + escapeHtml(c.title) + '</div>' +
-                       '<div class="meta">ERROR · ' + escapeHtml(err.message) + '</div>';
-      grid.appendChild(card);
+                       '<div class="meta">ERROR · ' + escapeHtml(err.message) + '</div>' +
+                       '<div class="url"><a href="' + url + '" target="_blank">open in app</a></div>';
       continue;
     }
-    const card = document.createElement('div');
-    card.className = 'card';
-    const url = urlFor(state);
     card.innerHTML =
       result.svg +
       '<div class="title">' + escapeHtml(c.title) + '</div>' +
@@ -439,7 +450,6 @@ async function run() {
       ' · ' + result.elapsedMs + 'ms\n' +
       escapeHtml(formatMeta(state)) + '</div>' +
       '<div class="url"><a href="' + url + '" target="_blank">open in app</a></div>';
-    grid.appendChild(card);
   }
   setStatus(stopFlag ? 'stopped' : 'done · ' + cases.length + ' renders');
   runBtn.disabled = false;
