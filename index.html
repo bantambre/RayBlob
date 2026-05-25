@@ -161,12 +161,12 @@
     <h2>Pasma Hatching</h2>
     <div class="field"><label>lw (mm)</label><input id="lw" type="number" min="0.1" max="1.0" step="0.05" value="0.3"></div>
     <div class="field"><label>Density ×lw</label><input id="density" type="number" min="1.5" max="6" step="0.25" value="2.5"></div>
-    <div class="field"><label>Buffer res</label><input id="bufRes" type="number" min="200" max="800" step="50" value="400"></div>
+    <div class="field"><label>Buffer res</label><input id="bufRes" type="number" min="200" max="800" step="25" value="400"></div>
 
     <h2>Light</h2>
-    <div class="field"><label>Light X</label><input id="lx" type="number" step="0.1" value="-0.6"></div>
-    <div class="field"><label>Light Y</label><input id="ly" type="number" step="0.1" value="0.8"></div>
-    <div class="field"><label>Light Z</label><input id="lz" type="number" step="0.1" value="-0.4"></div>
+    <div class="field"><label>Light X</label><input id="lx" type="number" min="-2" max="2" step="0.1" value="-0.6"></div>
+    <div class="field"><label>Light Y</label><input id="ly" type="number" min="-2" max="2" step="0.1" value="0.8"></div>
+    <div class="field"><label>Light Z</label><input id="lz" type="number" min="-2" max="2" step="0.1" value="-0.4"></div>
 
     <h2>Tone</h2>
     <div class="field"><label>Brightness</label><input id="brightness" type="number" min="-0.5" max="0.5" step="0.05" value="0"></div>
@@ -5714,26 +5714,20 @@ function buildPathD(paths, vbPaths) {
   return d;
 }
 
-// Display labels for the sky-style id stored in state.
-const SKY_STYLE_LABEL = {
-  gradient: 'gradient',
-  wobbly: 'wobbly lines',
-  multiGradient: 'box gradient',
-  paperGrain: 'paper grain',
-  arcs: 'concentric arcs',
-  stars: 'stars',
-  none: 'empty sky'
-};
-
 // Builds the bottom-margin text polylines (already in viewBox coords).
 function buildBottomLabel(state, strokeCount) {
-  const sky = SKY_STYLE_LABEL[state.skyStyle] || state.skyStyle;
+  const skyEntry = SKY_STYLES[state.skyStyle];
+  const sky = skyEntry ? skyEntry.label.toLowerCase() : state.skyStyle;
   const text = 'blobument  /  ' + strokeCount + ' strokes  /  '
              + sky + '  /  brepettis.com';
-  const scale = 0.032;                       // ~16 vb cap-height
   const baselineY = VB_H - 18;               // 18 vb above page bottom
-  const w = measureText(text, scale);
-  // True horizontal center on the page width.
+  // Pick a scale that keeps the label inside the printable width even
+  // when the strokeCount runs to 5 digits or the sky-style label is long.
+  const maxWidth = VB_W - 2 * MARGIN_VB;
+  let scale = 0.032;                         // ~16 vb cap-height (preferred)
+  let w = measureText(text, scale);
+  if (w > maxWidth) scale *= maxWidth / w;
+  w = measureText(text, scale);
   const startX = (VB_W - w) / 2;
   return renderTextStrokes(text, startX, baselineY, scale);
 }
@@ -5854,6 +5848,16 @@ function readSceneParams(sceneName) {
   return out;
 }
 
+// Single source of truth for which global state keys get serialised into
+// the permalink. Both syncFromUrl and writeUrl iterate this — they used
+// to maintain parallel lists that drifted.
+const URL_KEYS = [
+  'seed','scene','lw','density','nSpheres','spread','verticality',
+  'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle',
+  'waviness','rippleFreq','brightness','contrast','gamma','posterLevels',
+  'bufRes','lx','ly','lz'
+];
+
 function syncFromUrl() {
   const params = new URLSearchParams(window.location.search);
   // If the URL carries a serialised builder composition, restore it
@@ -5868,11 +5872,7 @@ function syncFromUrl() {
     document.getElementById('scene').value = urlScene;
     renderSceneUi(urlScene);
   }
-  const keys = ['seed','scene','lw','density','nSpheres','spread','verticality',
-                'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness','rippleFreq',
-                'brightness','contrast','gamma','posterLevels',
-                'bufRes','lx','ly','lz'];
-  for (const k of keys) {
+  for (const k of URL_KEYS) {
     const el = document.getElementById(k);
     if (el && params.has(k)) el.value = params.get(k);
   }
@@ -5889,9 +5889,7 @@ function syncFromUrl() {
 }
 function writeUrl(state) {
   const params = new URLSearchParams();
-  for (const k of ['seed','scene','lw','density','nSpheres','spread','verticality',
-                   'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle','waviness','rippleFreq',
-                'brightness','contrast','gamma','posterLevels']) {
+  for (const k of URL_KEYS) {
     if (state[k] != null) params.set(k, state[k]);
   }
   // Per-scene params: walk the active scene's UI schema and write any
@@ -6068,7 +6066,9 @@ function renderToSvgString(state) {
          '<path d="' + d + '" stroke="black" stroke-width="' + strokeVB.toFixed(3) +
          '" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     paths: paths,
-    strokeCount: paths.length
+    d: d,
+    strokeVB: strokeVB,
+    strokeCount: paths.length + extraVB.length
   };
 }
 
@@ -6143,7 +6143,7 @@ async function doRender() {
     svg.style.width = '480px';
     svg.style.height = '600px';
     svg.innerHTML = result.svg.replace(/^<svg[^>]*>|<\/svg>$/g, '');
-    lastRender = { state, paths: result.paths, d: '', strokeVB: lwToStrokeVB(state.lw) };
+    lastRender = { state, paths: result.paths, d: result.d, strokeVB: result.strokeVB };
     setStatus(
       result.strokeCount + ' strokes · ' + Math.round(t1 - t0) + 'ms\n' +
       'lw=' + state.lw + 'mm  spacing=' + (state.lw * state.density).toFixed(2) + 'mm'
@@ -6171,7 +6171,7 @@ function doSave() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'rayblob_seed-' + state.seed + '_lw-' + state.lw + '.svg';
+  a.download = 'rayblob_' + state.scene + '_seed-' + state.seed + '_lw-' + state.lw + '.svg';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
