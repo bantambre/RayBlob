@@ -220,12 +220,10 @@ let camR = [1, 0, 0];
 let camU = [0, 1, 0];
 let syHorizon = 0;
 
-// `opts` accepts either a number (legacy tilt-degrees) or an object:
-//   { tiltDeg, yawDeg, distance, pos: [x,y,z], focal }
+// `opts` is an object: { tiltDeg, yawDeg, distance, pos: [x,y,z], focal }.
 // Defaults: tilt 0, yaw 0, distance 5 (camera orbits at this radius around
 // the origin in the xz plane). `pos` overrides the orbit math entirely.
 function setupCamera(opts) {
-  if (typeof opts === 'number') opts = { tiltDeg: opts };
   opts = opts || {};
   const tiltDeg = opts.tiltDeg != null ? opts.tiltDeg : 0;
   const yawDeg  = opts.yawDeg  != null ? opts.yawDeg  : 0;
@@ -275,6 +273,13 @@ function materialDarknessShift(buf, idx) {
   const m = buf.material[idx];
   const p = MATERIAL_PROPS[m];
   return p ? p.darknessShift : 0;
+}
+
+// Cheap deterministic [0,1) hash from (sx, sy). Used by hatchers that
+// need a per-position dropout probability.
+function hash01(sx, sy) {
+  const h = Math.sin(sx * 1234.5 + sy * 5678.9 + 0.137) * 43758.5;
+  return h - Math.floor(h);
 }
 
 // Canonical per-pixel darkness for the blob surface, in [0, 1]:
@@ -4051,10 +4056,6 @@ function generateTspHatches(state, buf) {
   // Seed grid — slightly tighter than line spacing so dropouts give
   // a usable point density.
   const seedStep = baseSpacing * 1.1;
-  function hash01(sx, sy) {
-    const h = Math.sin(sx * 1234.5 + sy * 5678.9 + 0.137) * 43758.5;
-    return h - Math.floor(h);
-  }
   // Collect points with brightness-modulated keep probability.
   const points = [];
   for (let sy = SY_MIN; sy <= SY_MAX; sy += seedStep) {
@@ -4151,10 +4152,6 @@ function generateMonetHatches(state, buf) {
   const seedStep = baseSpacing * 1.4;
   const wobbleAmp = baseSpacing * 0.45;
   const dirNoise = makeNoise2D(state.seed + ':monetDir');
-  function hash01(sx, sy) {
-    const h = Math.sin(sx * 1234.5 + sy * 5678.9 + 0.137) * 43758.5;
-    return h - Math.floor(h);
-  }
   for (let sy = SY_MIN; sy <= SY_MAX; sy += seedStep) {
     for (let sx = SX_MIN; sx <= SX_MAX; sx += seedStep) {
       const idx = bufIdx(buf, sx, sy);
@@ -6060,8 +6057,7 @@ function renderToSvgString(state) {
       },
       sxToVB, syToVB, syHorizon: syHorizon
     };
-    try { extraVB = sceneResult.extraStrokes(ctx, state) || []; }
-    catch (e) { console.warn('extraStrokes error', e); }
+    extraVB = sceneResult.extraStrokes(ctx, state) || [];
   }
   const labelPaths = buildBottomLabel(state, paths.length);
   const d = buildPathD(paths, extraVB.concat(labelPaths));
