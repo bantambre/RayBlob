@@ -373,7 +373,7 @@ async function run() {
   runBtn.disabled = true;
   stopBtn.disabled = false;
   setStatus('warming up…');
-  const cases = matrixFn();
+  let cases = matrixFn();
   grid.innerHTML = '';
   try {
     await rendererReady();
@@ -396,6 +396,21 @@ async function run() {
     runBtn.disabled = false;
     stopBtn.disabled = true;
     return;
+  }
+  // Filter out cases that reference scenes hidden from the main app's
+  // scene dropdown — the gallery should mirror what's user-facing in
+  // the app, not surface scenes that have been hidden.
+  const visibleScenes = (function () {
+    try {
+      const sel = iframe.contentDocument && iframe.contentDocument.getElementById('scene');
+      if (!sel) return null;
+      return new Set(Array.from(sel.options).map(function (o) { return o.value; }));
+    } catch (e) { return null; }
+  })();
+  if (visibleScenes) {
+    cases = cases.filter(function (c) {
+      return !c.state || !c.state.scene || visibleScenes.has(c.state.scene);
+    });
   }
   // Object.assign({}, ...) — start fresh so leftover keys from a previous
   // run don't leak into baseDefault (which is cached across runs).

@@ -119,6 +119,16 @@
     <div class="field"><label>Ripple freq</label><input id="rippleFreq" type="number" min="2" max="30" step="0.5" value="7.0"></div>
 
     <h2>Pasma Hatching</h2>
+    <div class="field"><label>Paper size</label>
+      <select id="paperSize"
+              style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
+        <option value="4x5" selected>4 × 5 in</option>
+        <option value="4x6">4 × 6 in</option>
+        <option value="5x7">5 × 7 in</option>
+        <option value="8x10">8 × 10 in</option>
+        <option value="9x12">9 × 12 in</option>
+      </select>
+    </div>
     <div class="field"><label>lw (mm)</label><input id="lw" type="number" min="0.1" max="1.0" step="0.05" value="0.3"></div>
     <div class="field"><label>Density ×lw</label><input id="density" type="number" min="1.5" max="6" step="0.25" value="2.5"></div>
     <div class="field"><label>Buffer res</label><input id="bufRes" type="number" min="200" max="800" step="25" value="400"></div>
@@ -157,14 +167,40 @@
 // ============================================================
 // Constants & coordinate system
 // ============================================================
-// SVG output: 4×5 inch portrait, viewBox 1200×1500 (300 units/inch)
-const W_IN = 4, H_IN = 5;
-const VB_W = 1200, VB_H = 1500;
+// SVG output: paper size in inches, viewBox at 300 units/inch. The
+// concrete paper size is configurable via the UI; setPaperSize() below
+// is the single point that keeps all derived values consistent.
+let W_IN = 4, H_IN = 5;
+let VB_W = 1200, VB_H = 1500;
 const MARGIN_VB = 60;
 
-// Screen-space coords. sx ∈ [-1, 1], sy ∈ [-1.25, 1.25] (positive sy = UP).
+// Screen-space coords. sx ∈ [-1, 1] regardless of paper, sy extends
+// proportionally so the aspect matches the paper (positive sy = UP).
 const SX_MIN = -1, SX_MAX = 1;
-const SY_MIN = -1.25, SY_MAX = 1.25;
+let SY_MIN = -1.25, SY_MAX = 1.25;
+
+// Paper-size registry — string id → {w, h} in inches. Add a new entry
+// + an <option> in the paperSize <select> to expose another size.
+const PAPER_SIZES = {
+  '4x5':  { w: 4, h: 5  },
+  '4x6':  { w: 4, h: 6  },
+  '5x7':  { w: 5, h: 7  },
+  '8x10': { w: 8, h: 10 },
+  '9x12': { w: 9, h: 12 }
+};
+
+// Set the active paper size and recompute everything that derives from
+// it (viewBox, sy range, world-per-mm). Call before each render whenever
+// state.paperSize changes.
+function setPaperSize(wIn, hIn) {
+  W_IN = wIn; H_IN = hIn;
+  VB_W = Math.round(wIn * 300); VB_H = Math.round(hIn * 300);
+  // SY range is centred at 0 and scales with paper aspect (SX range stays [-1, 1]).
+  const halfSY = hIn / wIn;
+  SY_MIN = -halfSY; SY_MAX = halfSY;
+  // 1 sx-unit spans wIn/2 inches; WORLD_PER_MM = 1 / (wIn/2 * 25.4) = 2 / (wIn * 25.4).
+  WORLD_PER_MM = 2.0 / (wIn * 25.4);
+}
 
 // Camera position is fixed; the *direction* changes with `camTilt`, so the
 // horizon position on screen is configurable. These F/R/U vectors are
@@ -266,8 +302,9 @@ function computeDarkness(buf, idx) {
   ));
 }
 
-// 1 sx-unit = 2 inches = 50.8mm  ⇒  WORLD_PER_MM = 0.5 / 25.4
-const WORLD_PER_MM = 2.0 / (W_IN * 25.4);
+// Width of one sx-unit in mm, derived from current paper width. Updated
+// by setPaperSize() — `let` so it tracks the active paper.
+let WORLD_PER_MM = 2.0 / (W_IN * 25.4);
 
 // ============================================================
 // PRNG
@@ -5909,6 +5946,7 @@ function readState() {
     groundStyle: document.getElementById('groundStyle').value,
     waviness: clampFloat(document.getElementById('waviness').value, 0, 8, 3.0),
     rippleFreq: clampFloat(getInputValue('rippleFreq', 7.0), 1, 40, 7.0),
+    paperSize: getInputValue('paperSize', '4x5'),
     lw: clampFloat(document.getElementById('lw').value, 0.05, 2.0, 0.3),
     density: clampFloat(document.getElementById('density').value, 1.2, 8, 2.5),
     bufRes: clampInt(document.getElementById('bufRes').value, 200, 800, 400),
@@ -6007,7 +6045,7 @@ const URL_KEYS = [
   'seed','scene','lw','density','nSpheres','spread','verticality',
   'pointiness','smoothK','camTilt','hatchStyle','skyStyle','groundStyle',
   'waviness','rippleFreq','brightness','contrast','gamma','posterLevels',
-  'bufRes','lx','ly','lz'
+  'bufRes','lx','ly','lz','paperSize'
 ];
 
 function syncFromUrl() {
@@ -6132,6 +6170,7 @@ function defaultState() {
     camTilt: 6,
     hatchStyle: 'scan', skyStyle: 'gradient', groundStyle: 'perspective',
     waviness: 3.0, rippleFreq: 7.0,
+    paperSize: '4x5',
     lw: 0.3, density: 2.5, bufRes: 400,
     lx: -0.6, ly: 0.8, lz: -0.4,
     brightness: 0, contrast: 1, gamma: 1, posterLevels: 1
@@ -6147,6 +6186,9 @@ function defaultState() {
 // scene's ui ids) OR via `state.sceneParams = { ... }`. If neither is
 // supplied, the scene's UI defaults are used.
 function renderToSvgString(state) {
+  // Apply the requested paper size before any of the SX/SY/VB math runs.
+  const paper = PAPER_SIZES[state.paperSize] || PAPER_SIZES['4x5'];
+  setPaperSize(paper.w, paper.h);
   const rng = makeRng(state.seed);
   const sceneEntry = SCENES[state.scene] || SCENES.single;
   let sceneResult;
@@ -6295,8 +6337,16 @@ async function doRender() {
     const t1 = performance.now();
     const svg = document.getElementById('preview');
     svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
-    svg.style.width = '480px';
-    svg.style.height = '600px';
+    // Preview occupies a 480×600 box but keeps the paper's aspect ratio,
+    // so non-4:5 sizes (4:6, 5:7, 9:12) don't get stretched.
+    const aspect = H_IN / W_IN;
+    if (aspect >= 600 / 480) {
+      svg.style.height = '600px';
+      svg.style.width  = (600 / aspect) + 'px';
+    } else {
+      svg.style.width  = '480px';
+      svg.style.height = (480 * aspect) + 'px';
+    }
     svg.innerHTML = result.svg.replace(/^<svg[^>]*>|<\/svg>$/g, '');
     lastRender = { state, paths: result.paths, d: result.d, strokeVB: result.strokeVB };
     // Grey out the global Cam tilt slider for scenes that supply their
