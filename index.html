@@ -58,32 +58,14 @@
         <option value="tessellation">Tessellation field</option>
         <option value="metaballs">Floating metaballs</option>
         <option value="doorway">Doorway</option>
-        <option value="cathedralInterior">Cathedral interior</option>
+        <option value="cathedral">Cathedral</option>
         <option value="mengerSponge">Menger sponge</option>
-        <option value="mobius">Möbius strip</option>
-        <option value="dinoRibcage">Dinosaur ribcage</option>
         <option value="wave">Wave</option>
-        <option value="submerged">Submerged (kelp)</option>
         <option value="schotter">Schotter (3D)</option>
         <option value="spiralStaircase">Spiral staircase</option>
-        <option value="whaleBreach">Whale breach</option>
-        <option value="coral">Coral / branching</option>
-        <option value="rain">Rain</option>
-        <option value="domainRepeat">Domain repetition + wobble</option>
         <option value="bonsai">Bonsai</option>
         <option value="gnarledTree">Gnarled tree</option>
-        <option value="hilltopTree">Hilltop tree</option>
-        <option value="spaceTime">Distorted space-time</option>
         <option value="revolutionProfile">Revolution profile (urn)</option>
-        <option value="polyhedron">Polyhedron (octahedron)</option>
-        <option value="astronaut">Astronaut on a tiny planet</option>
-        <option value="engineBlock">Engine block</option>
-        <option value="sailboat">Sailboat</option>
-        <option value="animal">Animal (rabbit)</option>
-        <option value="escalators">Escalators</option>
-        <option value="cacti">Cacti</option>
-        <option value="megaliths">Megaliths</option>
-        <option value="ufoLandscape">UFO over landscape</option>
         <option value="hand">Hand</option>
         <option value="wireframeLattice">Wireframe lattice</option>
         <option value="containerTower">Container tower</option>
@@ -1867,76 +1849,105 @@ const SCENES = {
       };
     }
   },
-  cathedralInterior: {
+  cathedral: {
     ui: [
-      { id: 'pillarCount',  label: 'Pillars/side',  type: 'int',    min: 4,    max: 10,   step: 1,    default: 8    },
-      { id: 'pillarHeight', label: 'Pillar height', type: 'number', min: 0.70, max: 1.40, step: 0.05, default: 1.05 },
-      { id: 'pillarRadius', label: 'Pillar radius', type: 'number', min: 0.035, max: 0.080, step: 0.005, default: 0.055 },
-      { id: 'naveWidth',    label: 'Nave width',    type: 'number', min: 0.30, max: 0.55, step: 0.02, default: 0.40 },
-      { id: 'capitals',     label: 'Capitals',      type: 'enum',
+      { id: 'bodyWidth',    label: 'Body width',    type: 'number', min: 0.25, max: 0.60, step: 0.02, default: 0.36 },
+      { id: 'bodyHeight',   label: 'Body height',   type: 'number', min: 0.50, max: 1.10, step: 0.05, default: 0.75 },
+      { id: 'bodyDepth',    label: 'Body depth',    type: 'number', min: 0.20, max: 0.50, step: 0.02, default: 0.30 },
+      { id: 'towerHeight',  label: 'Tower height',  type: 'number', min: 0.70, max: 1.40, step: 0.05, default: 1.00 },
+      { id: 'spireHeight',  label: 'Spire height',  type: 'number', min: 0.30, max: 1.20, step: 0.05, default: 0.70 },
+      { id: 'spirePosition',label: 'Spire',         type: 'enum',
+        options: [
+          { value: 'center', label: 'center' },
+          { value: 'left',   label: 'left tower' },
+          { value: 'right',  label: 'right tower' }
+        ], default: 'center' },
+      { id: 'flyingButtress',label: 'Buttresses',   type: 'enum',
         options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' },
-      { id: 'lightBeam',    label: 'Light beam',    type: 'enum',
-        options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' },
-      { id: 'beamSide',     label: 'Beam side',     type: 'enum',
-        options: [{ value: 'left', label: 'left' }, { value: 'right', label: 'right' }], default: 'right' },
-      { id: 'altar',        label: 'Altar',         type: 'enum',
+      { id: 'roseWindow',   label: 'Rose window',   type: 'enum',
         options: [{ value: 'yes', label: 'yes' }, { value: 'no', label: 'no' }], default: 'yes' }
     ],
     build: function (rng, state, params) {
-      // Cathedral interior with majesty — taller pillars, optional Roman
-      // capitals (flared tops), a beam of light slanting down from a
-      // high clerestory window via the beamMask infrastructure (the
-      // sky generators carve a wedge of empty space), and an altar
-      // at the back of the nave for a focal point.
+      // Gothic cathedral facade — central nave body flanked by two
+      // square towers, with a tall thin spire either crowning the
+      // central body or one of the towers. A rose window pierces the
+      // front of the nave; tall lancet arches carve into the towers.
+      // Optional flying buttresses on each side give the recognisable
+      // gothic profile.
       const parts = [];
-      const N = params.pillarCount;
-      const PH = params.pillarHeight;
-      const naveW = params.naveWidth;
-      const pillarBottomY = -0.45;
-      const pillarTopY = pillarBottomY + PH;
-      const rad = params.pillarRadius;
-      for (let i = 0; i < N; i++) {
-        const z = 0.7 + i * 0.40;
-        parts.push(makeCylinderY(-naveW, pillarBottomY, pillarTopY, z, rad));
-        parts.push(makeCylinderY( naveW, pillarBottomY, pillarTopY, z, rad));
-        // Capital — wider, flatter cap on each pillar.
-        if (params.capitals === 'yes') {
-          parts.push(makeBox(-naveW, pillarTopY + 0.025, z, rad * 1.8, 0.025, rad * 1.8, 0.005));
-          parts.push(makeBox( naveW, pillarTopY + 0.025, z, rad * 1.8, 0.025, rad * 1.8, 0.005));
+      const carvers = [];
+      const groundY = GROUND_Y;
+      const bw = params.bodyWidth;
+      const bh = params.bodyHeight;
+      const bd = params.bodyDepth;
+      const bodyCY = groundY + bh;             // body box center y
+      const bodyTopY = groundY + 2 * bh;
+      // ─── Central body ────────────────────────────────────────────
+      parts.push(makeBox(0, bodyCY, 0, bw, bh, bd, 0.012));
+      // Pitched roof: cone-ish ridge running front-to-back (use a
+      // narrow box behind a slightly taller box gives an OK gable).
+      parts.push(makeBox(0, bodyTopY + 0.04, 0, bw * 0.92, 0.04, bd * 0.96, 0.012));
+      // ─── Side towers ─────────────────────────────────────────────
+      const tw = bw * 0.40;                    // tower half-width
+      const tx = bw + tw * 0.5;                // tower center x
+      const towerH = params.towerHeight;
+      const towerCY = groundY + towerH;
+      const towerTopY = groundY + 2 * towerH;
+      const towerDepth = bd * 0.85;
+      parts.push(makeBox(-tx, towerCY, 0, tw, towerH, towerDepth, 0.012));
+      parts.push(makeBox( tx, towerCY, 0, tw, towerH, towerDepth, 0.012));
+      // Crenellated tower caps — a slightly wider belt at the top.
+      parts.push(makeBox(-tx, towerTopY + 0.02, 0, tw * 1.10, 0.025, towerDepth * 1.05, 0.006));
+      parts.push(makeBox( tx, towerTopY + 0.02, 0, tw * 1.10, 0.025, towerDepth * 1.05, 0.006));
+      // ─── Spire ───────────────────────────────────────────────────
+      let spireBaseX = 0;
+      let spireBaseY = bodyTopY + 0.08;        // sits on the gable
+      if (params.spirePosition === 'left')  { spireBaseX = -tx; spireBaseY = towerTopY + 0.05; }
+      if (params.spirePosition === 'right') { spireBaseX =  tx; spireBaseY = towerTopY + 0.05; }
+      const spireBaseR = (params.spirePosition === 'center') ? bw * 0.18 : tw * 0.55;
+      const spireApex = spireBaseY + params.spireHeight;
+      parts.push(makeConeY(spireBaseX, spireApex, spireBaseY, 0, spireBaseR));
+      // Tiny pinnacle ball at the very top of the spire — finial.
+      parts.push(makeSphere(spireBaseX, spireApex + 0.018, 0, 0.012));
+      // ─── Flying buttresses ──────────────────────────────────────
+      if (params.flyingButtress === 'yes') {
+        for (const side of [-1, 1]) {
+          // Two buttress arches per side, tying tower base to body top.
+          for (const fz of [-bd * 0.45, bd * 0.45]) {
+            const x0 = side * bw;             // anchored at body wall
+            const x1 = side * (bw + tw * 0.85); // anchored at tower outer wall
+            const y0 = bodyCY + bh * 0.3;     // mid-body height (arch springs from here)
+            const y1 = groundY + 0.10;        // sloping down to tower base
+            const seg = makeCapsuleX(0, 0, 0, Math.abs(x1 - x0) * 0.5, 0.018);
+            const dx = (x1 - x0), dy = (y1 - y0);
+            const ang = Math.atan2(dy, dx);
+            let buttress = rotateZ(seg, ang);
+            buttress = translate(buttress, (x0 + x1) * 0.5, (y0 + y1) * 0.5, fz);
+            parts.push(buttress);
+          }
         }
       }
-      // Floor strip down the nave.
-      parts.push(makeBox(0, -0.50, 1.8, naveW * 0.95, 0.02, 1.4, 0.010));
-      // Back wall with arched window carved out.
-      const wallZ = 0.7 + N * 0.40 + 0.30;
-      const wall = makeBox(0, 0.05, wallZ, naveW + 0.18, PH * 0.55, 0.05, 0.020);
-      const arch = makeCapsuleZ(0, -0.15, wallZ, 0.3, 0.18);
-      parts.push(sdfSubtract(wall, [arch]));
-      // Altar — small box at the foot of the back wall.
-      if (params.altar === 'yes') {
-        parts.push(makeBox(0, -0.42, wallZ - 0.35, 0.12, 0.08, 0.07, 0.012));
-        // Tall cross/candlestick above the altar.
-        parts.push(makeCylinderY(0, -0.34, -0.10, wallZ - 0.35, 0.008));
-        parts.push(makeBox(0, -0.13, wallZ - 0.35, 0.05, 0.008, 0.008, 0.002));
+      // ─── Rose window cutout ─────────────────────────────────────
+      if (params.roseWindow === 'yes') {
+        const roseY = bodyCY + bh * 0.10;
+        const roseR = Math.min(bw * 0.45, bh * 0.45);
+        carvers.push(makeSphere(0, roseY, -bd - 0.02, roseR));
       }
-      const result = {
-        sdf: sdfUnion(parts, 0),
-        camera: { tiltDeg: 3, focal: 3.0 }
+      // ─── Lancet window slits in the towers ──────────────────────
+      // Tall pointed-arch openings, two per tower, on the front face.
+      const slitR = tw * 0.22;
+      for (const side of [-1, 1]) {
+        for (const yi of [0, 1]) {
+          const sy = groundY + towerH * (0.55 + yi * 0.45);
+          carvers.push(makeCapsuleZ(side * tx, sy, -towerDepth - 0.02,
+                                    towerDepth * 0.6, slitR));
+        }
+      }
+      const facade = sdfSubtract(sdfUnion(parts, 0.012), carvers);
+      return {
+        sdf: facade,
+        camera: { tiltDeg: 6, distance: 3.2 }
       };
-      // Light beam from a clerestory window — slanting down from high
-      // up on one side. The beam carves a wedge of empty space out of
-      // the sky pixels (which inside a cathedral happen to mostly be
-      // the empty regions between/behind pillars).
-      if (params.lightBeam === 'yes') {
-        const side = params.beamSide === 'left' ? -1 : 1;
-        const beamZ = 0.7 + (N * 0.40) * 0.5;  // midway down the nave
-        result.beamMask = {
-          apex: [side * (naveW + 0.18), 0.55, beamZ],
-          dirSx: -side * 0.55, dirSy: -1.0,
-          halfAngleDeg: 7
-        };
-      }
-      return result;
     }
   },
   mengerSponge: {
@@ -2190,43 +2201,181 @@ const SCENES = {
     return sdfIntersect([wobbled, bound]);
   },
   bonsai: function (rng, state) {
-    // Pot, gnarled trunk, two L-shaped branches, three foliage clusters.
-    // No recursion — every branch is explicit so the silhouette is
-    // controllable.
-    return sdfUnion([
-      makeBox(0, -0.30, 0, 0.14, 0.045, 0.10, 0.020),
-      makeCylinderY(0, -0.26, -0.06, 0, 0.026),
-      makeCylinderY(0.04, -0.06, 0.06, 0, 0.022),
-      makeCapsuleX(0.10, 0.06, 0, 0.06, 0.020),
-      makeCapsuleX(0.18, 0.06, 0, 0.04, 0.016),
-      makeCylinderY(0.20, 0.06, 0.16, 0, 0.014),
-      makeCapsuleX(-0.04, 0.04, 0, 0.05, 0.016),
-      makeCylinderY(-0.08, 0.04, 0.12, 0, 0.014),
-      makeSphere(0.21, 0.20, 0, 0.060),
-      makeSphere(-0.09, 0.16, 0, 0.050),
-      makeSphere(0.10, 0.12, 0, 0.048)
-    ], 0.022);
+    // Seed-driven bonsai: pot + curved gnarled trunk + recursive
+    // branching with foliage clusters at the tips. Every position,
+    // angle, length, and choice consumes rng so each seed produces a
+    // distinct tree. Randomize-reseeds change the silhouette entirely.
+    const parts = [];
+    // Pot at the base.
+    parts.push(makeBox(0, -0.30, 0, 0.16, 0.045, 0.11, 0.022));
+    // Lip rim on the pot.
+    parts.push(makeBox(0, -0.245, 0, 0.17, 0.012, 0.115, 0.006));
+    // Trunk: curving stack of short cylinders + occasional knot bulges.
+    const trunkSegs = 6;
+    let tx = 0, ty = -0.255, tz = 0;
+    let trunkR = 0.028;
+    const lean = (rng() - 0.5) * 0.10;   // overall trunk lean
+    const sway = 0.35 + rng() * 0.35;    // sway amplitude
+    for (let i = 0; i < trunkSegs; i++) {
+      const t = i / trunkSegs;
+      const segH = 0.05 + rng() * 0.025;
+      const nextY = ty + segH;
+      const nextX = tx + lean * 0.03 + Math.sin(t * sway * 6) * 0.012 + (rng() - 0.5) * 0.012;
+      const nextZ = tz + (rng() - 0.5) * 0.010;
+      parts.push(makeCylinderY((tx + nextX) * 0.5, ty, nextY, (tz + nextZ) * 0.5, trunkR));
+      // Occasional knot — a bulged sphere on the side of the trunk.
+      if (rng() < 0.5) {
+        parts.push(makeSphere(tx + (rng() - 0.5) * 0.04, ty + segH * 0.5, tz, trunkR * 1.15));
+      }
+      tx = nextX; ty = nextY; tz = nextZ;
+      trunkR *= 0.86;
+    }
+    // Main branches — 3-5 of them, anchored partway up the trunk.
+    const nMain = 3 + Math.floor(rng() * 3);
+    for (let b = 0; b < nMain; b++) {
+      const anchorT = 0.35 + b * (0.55 / nMain) + rng() * 0.08;
+      const ax = lean * anchorT + Math.sin(anchorT * sway * 6) * 0.012;
+      const ay = -0.255 + anchorT * 0.40;
+      // Branch heading — random yaw in [-π, π], gentle lift.
+      const yaw = (rng() - 0.5) * Math.PI * 1.5;
+      const lift = 0.20 + rng() * 0.45;
+      const len = 0.10 + rng() * 0.06;
+      const bx = ax + Math.cos(yaw) * len;
+      const by = ay + lift * len;
+      const bz = Math.sin(yaw) * len * 0.6;
+      // Branch segment as an oriented capsule (capsule on origin, then
+      // rotate+translate to (a→b)).
+      const branchR = 0.012 + rng() * 0.008;
+      const dx = bx - ax, dy = by - ay, dz = bz - 0;
+      const segLen = Math.hypot(dx, dy, dz);
+      let seg = makeCapsuleX(0, 0, 0, segLen * 0.5, branchR);
+      const elev = Math.atan2(dy, Math.hypot(dx, dz));
+      const az   = Math.atan2(dz, dx);
+      seg = rotateZ(seg, elev);
+      seg = rotateY(seg, -az);
+      seg = translate(seg, (ax + bx) * 0.5, (ay + by) * 0.5, bz * 0.5);
+      parts.push(seg);
+      // Sub-branches — 2-3 short twigs at the tip.
+      const nSub = 2 + Math.floor(rng() * 2);
+      const tipSpheres = [];
+      for (let s = 0; s < nSub; s++) {
+        const subYaw = yaw + (rng() - 0.5) * 1.0;
+        const subLen = len * (0.45 + rng() * 0.35);
+        const subLift = lift * 0.6 + (rng() - 0.5) * 0.15;
+        const sx = bx + Math.cos(subYaw) * subLen;
+        const sy = by + subLift * subLen;
+        const sz = bz + Math.sin(subYaw) * subLen * 0.6;
+        const sdx = sx - bx, sdy = sy - by, sdz = sz - bz;
+        const sL = Math.hypot(sdx, sdy, sdz);
+        let sub = makeCapsuleX(0, 0, 0, sL * 0.5, branchR * 0.65);
+        const sElev = Math.atan2(sdy, Math.hypot(sdx, sdz));
+        const sAz   = Math.atan2(sdz, sdx);
+        sub = rotateZ(sub, sElev);
+        sub = rotateY(sub, -sAz);
+        sub = translate(sub, (bx + sx) * 0.5, (by + sy) * 0.5, (bz + sz) * 0.5);
+        parts.push(sub);
+        tipSpheres.push([sx, sy, sz]);
+      }
+      // Foliage cluster — 2-4 overlapping spheres at the branch tips.
+      const nFoliage = 2 + Math.floor(rng() * 3);
+      for (let f = 0; f < nFoliage; f++) {
+        const tip = tipSpheres[f % tipSpheres.length];
+        const r = 0.030 + rng() * 0.022;
+        parts.push(makeSphere(
+          tip[0] + (rng() - 0.5) * 0.04,
+          tip[1] + (rng() - 0.5) * 0.025 + 0.015,
+          tip[2] + (rng() - 0.5) * 0.025,
+          r
+        ));
+      }
+    }
+    return sdfUnion(parts, 0.020);
   },
   gnarledTree: function (rng, state) {
-    // Single old tree: thick trunk, four L-shaped side branches,
-    // five foliage spheres at the branch tips. Manually composed
-    // self-similar silhouette without a recursion helper.
-    return sdfUnion([
-      makeCylinderY(0, -0.45, 0.15, 0, 0.038),
-      makeCapsuleX(-0.10, -0.10, 0, 0.10, 0.024),
-      makeCylinderY(-0.20, -0.10, 0.08, 0, 0.020),
-      makeCapsuleX( 0.10, 0.00, 0, 0.10, 0.024),
-      makeCylinderY( 0.20, 0.00, 0.12, 0, 0.020),
-      makeCapsuleX(-0.06, 0.16, 0, 0.06, 0.018),
-      makeCylinderY(-0.12, 0.16, 0.30, 0, 0.016),
-      makeCapsuleX( 0.06, 0.18, 0, 0.05, 0.018),
-      makeCylinderY( 0.11, 0.18, 0.30, 0, 0.016),
-      makeSphere(-0.22, 0.10, 0, 0.075),
-      makeSphere( 0.22, 0.14, 0, 0.075),
-      makeSphere(-0.12, 0.34, 0, 0.065),
-      makeSphere( 0.11, 0.36, 0, 0.065),
-      makeSphere( 0.00, 0.30, 0, 0.075)
-    ], 0.028);
+    // Seed-driven gnarled old tree: thick recursive trunk with knots,
+    // 4-6 major branches splitting into sub-branches, foliage clumps.
+    const parts = [];
+    // Wider base flare.
+    parts.push(makeSphere(0, -0.46, 0, 0.075));
+    // Trunk: stack of cylinder segments with knot bulges.
+    const trunkSegs = 7;
+    let tx = 0, ty = -0.46, tz = 0;
+    let trunkR = 0.045;
+    const lean = (rng() - 0.5) * 0.10;
+    const sway = 0.30 + rng() * 0.35;
+    const stopY = -0.05 + rng() * 0.10;
+    for (let i = 0; i < trunkSegs; i++) {
+      const t = i / trunkSegs;
+      const segH = (stopY - (-0.46)) / trunkSegs;
+      const nextY = ty + segH;
+      const nextX = tx + lean * 0.04 + Math.sin(t * sway * 5) * 0.020 + (rng() - 0.5) * 0.015;
+      const nextZ = tz + (rng() - 0.5) * 0.010;
+      parts.push(makeCylinderY((tx + nextX) * 0.5, ty, nextY, (tz + nextZ) * 0.5, trunkR));
+      // Knot bulge.
+      if (rng() < 0.45) {
+        const kSide = rng() < 0.5 ? -1 : 1;
+        parts.push(makeSphere(tx + kSide * trunkR * 0.7, ty + segH * 0.5, tz, trunkR * 1.10));
+      }
+      tx = nextX; ty = nextY; tz = nextZ;
+      trunkR *= 0.92;
+    }
+    // Major branches — 4-6 of them.
+    const nMain = 4 + Math.floor(rng() * 3);
+    for (let b = 0; b < nMain; b++) {
+      const anchorT = 0.40 + b * (0.55 / nMain) + rng() * 0.06;
+      const ax = lean * anchorT + Math.sin(anchorT * sway * 5) * 0.020;
+      const ay = -0.46 + anchorT * 0.55;
+      const yaw = (rng() - 0.5) * Math.PI * 1.8;
+      const lift = 0.35 + rng() * 0.55;
+      const len = 0.13 + rng() * 0.10;
+      const bx = ax + Math.cos(yaw) * len;
+      const by = ay + lift * len;
+      const bz = Math.sin(yaw) * len * 0.55;
+      const branchR = 0.018 + rng() * 0.010;
+      const dx = bx - ax, dy = by - ay, dz = bz - 0;
+      const segLen = Math.hypot(dx, dy, dz);
+      let seg = makeCapsuleX(0, 0, 0, segLen * 0.5, branchR);
+      const elev = Math.atan2(dy, Math.hypot(dx, dz));
+      const az   = Math.atan2(dz, dx);
+      seg = rotateZ(seg, elev);
+      seg = rotateY(seg, -az);
+      seg = translate(seg, (ax + bx) * 0.5, (ay + by) * 0.5, bz * 0.5);
+      parts.push(seg);
+      // Sub-branches — 2-4 short twigs.
+      const nSub = 2 + Math.floor(rng() * 3);
+      const tipSpheres = [];
+      for (let s = 0; s < nSub; s++) {
+        const subYaw = yaw + (rng() - 0.5) * 1.1;
+        const subLen = len * (0.45 + rng() * 0.40);
+        const subLift = lift * 0.7 + (rng() - 0.5) * 0.20;
+        const sx = bx + Math.cos(subYaw) * subLen;
+        const sy = by + subLift * subLen;
+        const sz = bz + Math.sin(subYaw) * subLen * 0.55;
+        const sdx = sx - bx, sdy = sy - by, sdz = sz - bz;
+        const sL = Math.hypot(sdx, sdy, sdz);
+        let sub = makeCapsuleX(0, 0, 0, sL * 0.5, branchR * 0.55);
+        const sElev = Math.atan2(sdy, Math.hypot(sdx, sdz));
+        const sAz   = Math.atan2(sdz, sdx);
+        sub = rotateZ(sub, sElev);
+        sub = rotateY(sub, -sAz);
+        sub = translate(sub, (bx + sx) * 0.5, (by + sy) * 0.5, (bz + sz) * 0.5);
+        parts.push(sub);
+        tipSpheres.push([sx, sy, sz]);
+      }
+      // Foliage clumps at the tips — 3-5 spheres.
+      const nFoliage = 3 + Math.floor(rng() * 3);
+      for (let f = 0; f < nFoliage; f++) {
+        const tip = tipSpheres[f % tipSpheres.length];
+        const r = 0.050 + rng() * 0.040;
+        parts.push(makeSphere(
+          tip[0] + (rng() - 0.5) * 0.06,
+          tip[1] + (rng() - 0.5) * 0.035 + 0.020,
+          tip[2] + (rng() - 0.5) * 0.040,
+          r
+        ));
+      }
+    }
+    return sdfUnion(parts, 0.025);
   },
   hilltopTree: function (rng, state) {
     // A lone tree (trunk cylinder + spherical canopy) on top of a low
@@ -2259,15 +2408,44 @@ const SCENES = {
     return warp(obelisk, distort);
   },
   revolutionProfile: function (rng, state) {
-    // Classical urn revolved around Y. Profile in (r, y):
-    // wide foot ring → narrow stem → fat belly → narrow neck → flared lip.
+    // Classical urn revolved around Y. The profile is a connected
+    // tall box (the urn's wall) plus a wider circle (the belly)
+    // plus a wider foot and flared lip — all overlapping so nothing
+    // floats. Per-seed jitter on radii and heights varies the
+    // silhouette between squat amphora and tall narrow vase shapes.
+    const footR    = 0.090 + rng() * 0.040;          // 0.09–0.13
+    const stemR    = 0.040 + rng() * 0.025;          // 0.04–0.065
+    const bellyY   = -0.10 + rng() * 0.14;           // -0.10..+0.04
+    const bellyR   = 0.13 + rng() * 0.07;            // 0.13–0.20
+    const bellyH   = 0.18 + rng() * 0.10;            // height of belly oval
+    const neckR    = stemR * (0.85 + rng() * 0.30);  // 0.034–0.085
+    const lipR     = footR * (0.85 + rng() * 0.40);  // ~0.08–0.18
+    const baseY    = -0.42;
+    const topY     = 0.30 + rng() * 0.10;            // 0.30–0.40
+    // The CENTRAL COLUMN — a tall thin box that runs the full height of
+    // the urn so the foot, belly, neck, and lip are all anchored to the
+    // same continuous spine. Without this the smooth-union gaps between
+    // disjoint elements made the foot look like it floated.
+    const columnH = (topY - baseY) * 0.5;
+    const columnCY = (topY + baseY) * 0.5;
     const profile = sdfUnion([
-      box2D(0.10, -0.42, 0.10, 0.020, 0.012),
-      box2D(0.055, -0.36, 0.055, 0.040, 0.012),
-      circle2D(0.16, -0.05, 0.18),
-      box2D(0.055, 0.20, 0.055, 0.060, 0.012),
-      box2D(0.11, 0.30, 0.11, 0.022, 0.012)
-    ], 0.040);
+      // Central column (the urn's wall).
+      box2D(stemR * 0.80, columnCY, stemR * 0.80, columnH, 0.012),
+      // Foot ring at the base — wider disc.
+      box2D(footR, baseY + 0.020, footR, 0.020, 0.012),
+      // Foot upper rim — gentle taper into the column.
+      box2D(footR * 0.70, baseY + 0.060, footR * 0.70, 0.020, 0.010),
+      // Belly — fat oval midway up.
+      circle2D(bellyR, bellyY, bellyH * 0.55),
+      // Belly lower shoulder — keeps the belly from looking detached.
+      box2D(bellyR * 0.55, bellyY - bellyH * 0.40, bellyR * 0.55, 0.020, 0.012),
+      // Belly upper shoulder.
+      box2D(bellyR * 0.55, bellyY + bellyH * 0.40, bellyR * 0.55, 0.020, 0.012),
+      // Neck.
+      box2D(neckR, topY - 0.080, neckR, 0.060, 0.012),
+      // Flared lip at the top.
+      box2D(lipR, topY, lipR, 0.025, 0.012)
+    ], 0.045);
     return { sdf: revolveY(profile), camera: { tiltDeg: 8 } };
   },
   polyhedron: function (rng, state) {
