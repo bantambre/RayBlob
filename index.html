@@ -250,6 +250,18 @@ function setupCamera(opts) {
   syHorizon = -camF[1] * FOCAL / camU[1];
 }
 
+// Named camera poses. Scenes can `return { sdf, camera: CAMERA.hero }` for
+// a standard horizon-line composition (mostly used for ground-based forms)
+// or use one of the alternates. Scene-specific compositions still pass
+// their own `{ tiltDeg, yawDeg, distance }` literals where the framing is
+// genuinely bespoke.
+const CAMERA = {
+  hero:        { tiltDeg: 6 },                       // standard horizon, looking at a ground-anchored form
+  threeQuarter:{ tiltDeg: 6,  yawDeg: 22 },          // hero pose with a slight off-axis turn
+  closeUp:     { tiltDeg: 14, yawDeg: 22 },          // closer, more vertical (polyhedron-style)
+  topDown:     { tiltDeg: 22, yawDeg: 18 }           // dramatic looking-down (UFO/mengerSponge)
+};
+
 // Hatching: 4 fixed screen-space angles, picked per-pixel from the projected
 // surface normal of the blob.
 const HATCH_ANGLES = [0, Math.PI / 4, Math.PI / 2, 3 * Math.PI / 4];
@@ -677,6 +689,24 @@ function displace(sdf, noiseFn, amp) {
   };
 }
 
+// 3-octave isotropic surface roughening. Standard pattern across rock /
+// stone / ice scenes. Caller supplies a seed key (so multiple instances
+// don't share noise), the displacement amplitude, and optionally per-
+// octave frequencies and weights. Default freqs/weights produce a
+// general-purpose "weathered stone" texture. amp ≤ 0 returns sdf
+// unchanged so callers don't need their own zero-guard.
+function roughenSDF(sdf, seedKey, amp, freqs, weights) {
+  if (amp <= 0) return sdf;
+  const F = freqs   || [6,    16,   38];
+  const W = weights || [0.50, 0.30, 0.20];
+  const n3 = makeNoise3D(seedKey);
+  return displace(sdf, function (x, y, z) {
+    return W[0] * n3(x * F[0], y * F[0], z * F[0]) +
+           W[1] * n3(x * F[1], y * F[1], z * F[1]) +
+           W[2] * n3(x * F[2], y * F[2], z * F[2]);
+  }, amp);
+}
+
 // Rotate the input position around the Y axis by `k * y` radians before
 // evaluating — twists any vertical form into a helix.
 // Generic position warp: offset the input p by a 3-vector returned by
@@ -1085,7 +1115,6 @@ const SCENES = {
       // URH #437 look.
       const N = params.trilithonCount;
       const parts = [];
-      const groundY = -0.5;
       const w = params.stoneWidth;
       const h = params.stoneHeight;
       const halfArc = Math.PI * params.arcSpan;
@@ -1106,14 +1135,14 @@ const SCENES = {
           const uz = cz + tangent[2] * (sep / 2) * side;
           let upright = makeBox(0, heightHere, 0, w, heightHere, w * 0.75, 0.012);
           upright = rotateY(upright, angle);
-          parts.push(translate(upright, ux, groundY, uz));
+          parts.push(translate(upright, ux, GROUND_Y, uz));
         }
         // Lintel: thick horizontal slab spanning the two uprights.
         const lintelH = w * 0.55;
         let lintel = makeBox(0, heightHere * 2 + lintelH, 0,
                              sep / 2 + w, lintelH, w * 0.75, 0.012);
         lintel = rotateY(lintel, angle);
-        parts.push(translate(lintel, cx, groundY, cz));
+        parts.push(translate(lintel, cx, GROUND_Y, cz));
       }
       // Fallen / scattered stones in the foreground for narrative weight.
       for (let i = 0; i < params.fallenStones; i++) {
@@ -1126,17 +1155,11 @@ const SCENES = {
         let stone = makeBox(0, fh, 0, fw, fh, fw * 0.85, 0.012);
         stone = rotateY(stone, rng() * Math.PI * 2);
         stone = rotateZ(stone, (rng() - 0.5) * 0.50);
-        parts.push(translate(stone, fx, groundY, fz));
+        parts.push(translate(stone, fx, GROUND_Y, fz));
       }
       let scene = sdfUnion(parts, 0);
-      if (params.roughness > 0) {
-        const n3 = makeNoise3D(state.seed + ':stonehengeNoise');
-        scene = displace(scene, function (x, y, z) {
-          return 0.55 * n3(x *  5, y *  5, z *  5) +
-                 0.30 * n3(x * 14, y * 14, z * 14) +
-                 0.15 * n3(x * 32, y * 32, z * 32);
-        }, params.roughness);
-      }
+      scene = roughenSDF(scene, state.seed + ':stonehengeNoise',
+                         params.roughness, [5, 14, 32], [0.55, 0.30, 0.15]);
       return { sdf: scene, camera: { tiltDeg: 22, yawDeg: 0, distance: 3.5 } };
     }
   },
@@ -1179,14 +1202,7 @@ const SCENES = {
         pointiness: params.rockPointiness,
         scale: params.rockScale
       });
-      if (params.rockJaggedness > 0) {
-        const n3 = makeNoise3D(state.seed + ':archRock');
-        base = displace(base, function (x, y, z) {
-          return 0.50 * n3(x *  6, y *  6, z *  6) +
-                 0.30 * n3(x * 16, y * 16, z * 16) +
-                 0.20 * n3(x * 38, y * 38, z * 38);
-        }, params.rockJaggedness);
-      }
+      base = roughenSDF(base, state.seed + ':archRock', params.rockJaggedness);
       // Tunnel along z (front-to-back) at the waterline (y = -0.50).
       // Only the upper half-circle of the opening shows above water —
       // the lower half is submerged so the arch sits IN the water.
@@ -1332,25 +1348,14 @@ const SCENES = {
       // Optional surface jaggedness — two-octave 3-D noise displaces the
       // octahedral silhouette, breaking the clean diamond edges into
       // fractured rocky detail when the slider is above 0.
-      if (params.rockJaggedness > 0) {
-        const n3 = makeNoise3D(state.seed + ':lighthouseRock');
-        // Three octaves: big folds + medium bumps + fine grain. The
-        // amplitudes roughly halve each octave so the silhouette is
-        // dominated by the largest folds while the high-freq layer
-        // adds rocky texture without dominating the form.
-        rock = displace(rock, function (x, y, z) {
-          return 0.50 * n3(x *  6, y *  6, z *  6) +
-                 0.30 * n3(x * 16, y * 16, z * 16) +
-                 0.20 * n3(x * 38, y * 38, z * 38);
-        }, params.rockJaggedness);
-      }
+      rock = roughenSDF(rock, state.seed + ':lighthouseRock', params.rockJaggedness);
       // Lighthouse cylinder + lamp room + dome on top of the rock.
       const body = makeCylinderY(baseX, -0.10, 0.46, 0, 0.10);
       const lamp = makeCylinderY(baseX,  0.46, 0.62, 0, 0.14);
       const roof = makeSphere   (baseX,  0.70, 0, 0.12);
       const result = {
         sdf: sdfUnion([rock, body, lamp, roof], 0.035),
-        camera: { tiltDeg: 6 }
+        camera: CAMERA.hero
       };
       // Beam dispatch: 'negative' carves a sky wedge, 'rays' draws a fan
       // of line strokes from the dome via the lighthouseBeam helper,
@@ -1430,14 +1435,7 @@ const SCENES = {
         // smeared adjacent-rock valleys together). With per-rock
         // displacement and a sharp union, each rock keeps its own
         // weathered silhouette and the gaps between rocks stay visible.
-        if (params.jaggedness > 0) {
-          const n3 = makeNoise3D(state.seed + ':cairnRock' + i);
-          rock = displace(rock, function (x, y, z) {
-            return 0.50 * n3(x *  6, y *  6, z *  6) +
-                   0.30 * n3(x * 16, y * 16, z * 16) +
-                   0.20 * n3(x * 38, y * 38, z * 38);
-          }, params.jaggedness);
-        }
+        rock = roughenSDF(rock, state.seed + ':cairnRock' + i, params.jaggedness);
         rocks.push(rock);
         // Slightly larger stack step (1.30 → 1.45) so adjacent rocks
         // overlap less; the gap between them reads as a visible seam.
@@ -1462,14 +1460,8 @@ const SCENES = {
       // Light X / Y / Z sliders to e.g. (-0.9, 0.4, 0.2) for a low-sun
       // angle that casts a long shadow across the ground.
       let p = makePyramidSquare(0, -0.7, 0, params.halfSide, params.height);
-      if (params.jaggedness > 0) {
-        const n3 = makeNoise3D(state.seed + ':pyramidNoise');
-        p = displace(p, function (x, y, z) {
-          return 0.55 * n3(x *  9, y *  9, z *  9) +
-                 0.30 * n3(x * 22, y * 22, z * 22) +
-                 0.15 * n3(x * 48, y * 48, z * 48);
-        }, params.jaggedness);
-      }
+      p = roughenSDF(p, state.seed + ':pyramidNoise',
+                     params.jaggedness, [9, 22, 48], [0.55, 0.30, 0.15]);
       return {
         sdf: p,
         camera: { tiltDeg: params.tiltDeg, yawDeg: params.yawDeg }
@@ -1611,14 +1603,8 @@ const SCENES = {
       // Surface jaggedness — three octaves of noise. The mid + fine
       // octaves break up the diamond facets; the big octave shapes
       // overall folds in the silhouette.
-      if (params.jaggedness > 0) {
-        const n3 = makeNoise3D(state.seed + ':icebergNoise');
-        berg = displace(berg, function (x, y, z) {
-          return 0.50 * n3(x *  5, y *  5, z *  5) +
-                 0.30 * n3(x * 14, y * 14, z * 14) +
-                 0.20 * n3(x * 32, y * 32, z * 32);
-        }, params.jaggedness);
-      }
+      berg = roughenSDF(berg, state.seed + ':icebergNoise',
+                        params.jaggedness, [5, 14, 32]);
       return {
         sdf: berg,
         // Material cutoff is the WATER LINE (y = GROUND_Y = -0.5).
@@ -1843,14 +1829,8 @@ const SCENES = {
       let mountain = makeConeY(0, apexY, baseY, 0, params.mountainRadius);
       // Slight noise on the slopes so it doesn't read as a perfect
       // geometric cone — adds erosion / weathering detail.
-      if (params.mountainNoise > 0) {
-        const n3m = makeNoise3D(state.seed + ':volcanoMountain');
-        mountain = displace(mountain, function (x, y, z) {
-          return 0.55 * n3m(x * 5,  y * 5,  z * 5) +
-                 0.30 * n3m(x * 14, y * 14, z * 14) +
-                 0.15 * n3m(x * 32, y * 32, z * 32);
-        }, params.mountainNoise);
-      }
+      mountain = roughenSDF(mountain, state.seed + ':volcanoMountain',
+                            params.mountainNoise, [5, 14, 32], [0.55, 0.30, 0.15]);
       // Build the smoke as small spheres along an upward path. Radius
       // tapers from baseR at the bottom to baseR × smokeTaper at the top.
       // Drift accumulates with t² so the plume curves more strongly higher up.
@@ -2008,14 +1988,8 @@ const SCENES = {
         }
       }
       let menger = sdfUnion(cubes, 0);
-      if (params.noise > 0) {
-        const n3 = makeNoise3D(state.seed + ':mengerNoise');
-        menger = displace(menger, function (x, y, z) {
-          return 0.55 * n3(x * 14, y * 14, z * 14) +
-                 0.30 * n3(x * 30, y * 30, z * 30) +
-                 0.15 * n3(x * 60, y * 60, z * 60);
-        }, params.noise);
-      }
+      menger = roughenSDF(menger, state.seed + ':mengerNoise',
+                          params.noise, [14, 30, 60], [0.55, 0.30, 0.15]);
       const all = [menger];
       if (params.pedestal === 'yes') {
         // Upper plinth (closer to the sponge).
@@ -2049,7 +2023,7 @@ const SCENES = {
         -Math.sin(phi) * radius
       ));
     }
-    return { sdf: sdfUnion(parts, 0.010), camera: { tiltDeg: 22, yawDeg: 18 } };
+    return { sdf: sdfUnion(parts, 0.010), camera: CAMERA.topDown };
   },
   dinoRibcage: function (rng, state) {
     // Central spine + paired arcing ribs. Each rib is 4 short capsule
@@ -2311,7 +2285,7 @@ const SCENES = {
   },
   polyhedron: function (rng, state) {
     // Single octahedron viewed off-axis so all three diamond faces are visible.
-    return { sdf: makeOctahedron(0, 0.15, 0, 0.32), camera: { tiltDeg: 14, yawDeg: 22 } };
+    return { sdf: makeOctahedron(0, 0.15, 0, 0.32), camera: CAMERA.closeUp };
   },
   astronaut: {
     ui: [
@@ -2661,7 +2635,7 @@ const SCENES = {
         obj = translate(obj, x, y, z);
         parts.push(obj);
       }
-      return { sdf: sdfUnion(parts, 0), camera: { tiltDeg: 6 } };
+      return { sdf: sdfUnion(parts, 0), camera: CAMERA.hero };
     }
   },
   mirroredForm: function (rng, state) {
@@ -2713,14 +2687,8 @@ const SCENES = {
         peakParts.push(peak);
       }
       let mountains = sdfUnion(peakParts, 0.20);
-      if (params.roughness > 0) {
-        const n3 = makeNoise3D(state.seed + ':mountains');
-        mountains = displace(mountains, function (x, y, z) {
-          return 0.55 * n3(x *  5, y *  5, z *  5) +
-                 0.30 * n3(x * 14, y * 14, z * 14) +
-                 0.15 * n3(x * 32, y * 32, z * 32);
-        }, params.roughness);
-      }
+      mountains = roughenSDF(mountains, state.seed + ':mountains',
+                             params.roughness, [5, 14, 32], [0.55, 0.30, 0.15]);
       // Foreground anchor — gives scale to the distant peaks.
       let foreground = null;
       const fgX = (params.foregroundSide === 'left' ? -1 : 1) * 0.58;
@@ -2748,7 +2716,7 @@ const SCENES = {
       const snowYMin = -0.50 + params.maxHeight * (1 - params.snowLine);
       return {
         sdf: sdf,
-        camera: { tiltDeg: 6 },
+        camera: CAMERA.hero,
         materialFn: function (x, y, z) {
           // Foreground keeps default material.
           // Mountains above snow line read as bright snowcap.
@@ -2937,7 +2905,7 @@ const SCENES = {
         const m2 = makeBlobSDFAt(rng, { center: [ 0.30, -0.30, 0.25], nSpheres: 4, smoothK: 0.18, spread: 1.10, verticality: 0.85, pointiness: 0.4, scale: 0.45 });
         combined = sdfUnion([saucer, m1, m2], 0);
       }
-      const result = { sdf: combined, camera: { tiltDeg: 6 } };
+      const result = { sdf: combined, camera: CAMERA.hero };
       const wantNegative = (params.beam === 'negative' || params.beam === 'both');
       const wantRays     = (params.beam === 'rays'     || params.beam === 'both');
       if (wantNegative) {
@@ -3031,7 +2999,6 @@ const SCENES = {
       const cols = [];
       const n = params.columnCount;
       const centerOffset = -(n - 1) / 2 * params.spacing;
-      const groundY = -0.5;
       const baseHalfH = 0.045;
       const hasBase = params.pedestal === 'yes';
       // Track each column's actual top y so the lintel sits on the
@@ -3082,7 +3049,7 @@ const SCENES = {
           }
         }
         let assembly = sdfUnion(parts, 0.02);
-        const liftY = groundY + (hasBase ? 2 * baseHalfH : 0);
+        const liftY = GROUND_Y + (hasBase ? 2 * baseHalfH : 0);
         assembly = translate(assembly, cx, liftY, 0);
         cols.push(assembly);
         // Broken column: add a fallen drum on the ground next to it.
@@ -3093,14 +3060,14 @@ const SCENES = {
           let drum = makeCapsuleX(0, 0, 0, drumLen, drumR);
           drum = rotateY(drum, rng() * Math.PI * 2);
           drum = translate(drum, cx + (rng() - 0.5) * 0.10,
-                                 groundY + drumR,
+                                 GROUND_Y + drumR,
                                  (rng() - 0.5) * 0.08);
           cols.push(drum);
         }
       }
       // Lintel architecture above the standing columns.
       if (params.lintel !== 'none' && minStandingTop !== Infinity) {
-        const liftY = groundY + (hasBase ? 2 * baseHalfH : 0);
+        const liftY = GROUND_Y + (hasBase ? 2 * baseHalfH : 0);
         const lintelWorldY = liftY + lintelY + baseHalfH * 2;
         const lintelExtent = (n - 1) / 2 * params.spacing + params.columnWidth * 2.0;
         if (params.lintel === 'flat') {
