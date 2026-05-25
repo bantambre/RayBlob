@@ -278,6 +278,18 @@ function materialDarknessShift(buf, idx) {
   return p ? p.darknessShift : 0;
 }
 
+// Canonical per-pixel darkness for the blob surface, in [0, 1]:
+// Lambert (inverted) + soft-shadow penumbra + AO contribution + material shift.
+// Every hatcher should call this; tonal-curve tweaks happen in one place.
+function computeDarkness(buf, idx) {
+  return Math.max(0, Math.min(1,
+    (1 - buf.light[idx]) +
+    0.50 * buf.shadow[idx] +
+    0.20 * (1 - buf.ao[idx]) +
+    materialDarknessShift(buf, idx)
+  ));
+}
+
 // 1 sx-unit = 2 inches = 50.8mm  ⇒  WORLD_PER_MM = 0.5 / 25.4
 const WORLD_PER_MM = 2.0 / (W_IN * 25.4);
 
@@ -844,24 +856,6 @@ function stack(builder, count, smoothK) {
   return sdfUnion(sdfs, smoothK || 0);
 }
 
-// Domain repetition. `period` is an [x, y, z] array; pass 0 on an axis to
-// disable repetition there. Each query point gets wrapped into the
-// [-p/2, p/2] cell before evaluating the underlying SDF.
-function repeat(sdf, period) {
-  return function (x, y, z) {
-    if (period[0] > 0) {
-      const p = period[0]; x = x - p * Math.floor((x + p / 2) / p);
-    }
-    if (period[1] > 0) {
-      const p = period[1]; y = y - p * Math.floor((y + p / 2) / p);
-    }
-    if (period[2] > 0) {
-      const p = period[2]; z = z - p * Math.floor((z + p / 2) / p);
-    }
-    return sdf(x, y, z);
-  };
-}
-
 // X-axis-aligned capsule — useful as a "tunnel" carver to punch a
 // horizontal arch through a rock. (Hvítserkur-style.)
 function makeCapsuleX(cx, cy, cz, halfLen, r) {
@@ -1168,7 +1162,7 @@ const SCENES = {
                  0.15 * n3(x * 32, y * 32, z * 32);
         }, params.roughness);
       }
-      return { sdf: scene, camera: { tiltDeg: 14, yawDeg: 0 } };
+      return { sdf: scene, camera: { tiltDeg: 22, yawDeg: 0, distance: 3.5 } };
     }
   },
   arch: {
@@ -1397,8 +1391,8 @@ const SCENES = {
         };
       }
       if (useRays) {
-        const numRays = params.beamRays || 17;
-        const spreadDeg = params.beamSpreadDeg || 22;
+        const numRays = params.beamRays != null ? params.beamRays : 34;
+        const spreadDeg = params.beamSpreadDeg != null ? params.beamSpreadDeg : 7;
         result.extraStrokes = function (ctx) {
           // centerDeg = -90 → rays radiate to the LEFT (lighthouseBeam's
           // 0 = up, positive = right, negative = left).
@@ -1475,15 +1469,7 @@ const SCENES = {
         cy += scale * flatnessHere * 1.45;
       }
       // Sharp union — each rock silhouette stays distinct.
-      let cairn = sdfUnion(rocks, 0);
-      if (false) {  // (legacy whole-cairn noise disabled — now per-rock above)
-        const n3 = makeNoise3D(state.seed + ':cairn');
-        cairn = displace(cairn, function (x, y, z) {
-          return 0.50 * n3(x *  6, y *  6, z *  6) +
-                 0.30 * n3(x * 16, y * 16, z * 16) +
-                 0.20 * n3(x * 38, y * 38, z * 38);
-        }, params.jaggedness);
-      }
+      const cairn = sdfUnion(rocks, 0);
       return cairn;
     }
   },
@@ -1708,7 +1694,6 @@ const SCENES = {
       // distant trees toward the bright/sparse material so they fade
       // into atmospheric haze (misty receding depth).
       const trees = [];
-      const treeBuckets = [];   // {cx, cz, layer, t, halfWidth}
       const N = params.treeCount;
       const L = params.depthLayers;
       for (let i = 0; i < N; i++) {
@@ -1774,7 +1759,6 @@ const SCENES = {
           }
         }
         trees.push(tree);
-        treeBuckets.push({ cx, cz, t });
       }
       // Foreground HERO tree — much larger than the rest, positioned
       // off-centre via heroSide. Lives in the closest depth layer (negative
@@ -1825,7 +1809,6 @@ const SCENES = {
           hero = sdfUnion([trunk, c1, c2], 0.04);
         }
         trees.push(hero);
-        treeBuckets.push({ cx: hx, cz: hz, t: 0 });
       }
       return {
         sdf: sdfUnion(trees, 0),
@@ -2898,7 +2881,7 @@ const SCENES = {
     // A plane carve removes everything in front of the camera so the
     // nearest column of cells doesn't block the view.
     const cell = makeBox(0, -0.4, 0, 0.06, 0.3, 0.06);
-    const field = repeat(cell, [0.32, 0, 0.32]);
+    const field = repeat(cell, 0.32, 0, 0.32);
     const cullFront = makePlane(0, 0, 1, 0.2);
     return sdfSubtract(field, [cullFront]);
   },
@@ -3125,12 +3108,14 @@ const SCENES = {
       let minStandingTop = Infinity;
       const colHeights = [];
       const isBroken = [];
+      const colTwists = [];
       for (let i = 0; i < n; i++) {
         const twist = params.twistAmount *
                       (1 + (rng() - 0.5) * 2 * params.twistVariety);
         const broken = rng() < params.brokenChance;
         const baseH = params.columnHeight * (0.92 + rng() * 0.16);
         const h = broken ? baseH * (0.25 + rng() * 0.40) : baseH;
+        colTwists.push(twist);
         colHeights.push(h);
         isBroken.push(broken);
         if (!broken) minStandingTop = Math.min(minStandingTop, 2 * h);
@@ -3139,8 +3124,7 @@ const SCENES = {
       const lintelY = (minStandingTop === Infinity) ? 0 : minStandingTop;
       for (let i = 0; i < n; i++) {
         const cx = centerOffset + i * params.spacing;
-        const twist = params.twistAmount *
-                      (1 + (rng() - 0.5) * 2 * params.twistVariety);
+        const twist = colTwists[i];
         const h = colHeights[i];
         const w = params.columnWidth;
         const slab = makeBox(0, h, 0, w * 1.5, h, w * 0.55);
@@ -3967,10 +3951,7 @@ function shouldDrawAt(buf, sx, sy, angleIdx) {
   // scene-supplied material id can shift darkness further (denser or
   // sparser hatching per region — see MATERIAL_PROPS).
   const offset = (angleIdx - pri + 4) % 4;
-  let darkness = 1 - buf.light[idx];
-  // Soft shadow penumbra + AO contribution to per-pixel darkness.
-  darkness = Math.min(1, darkness + 0.55 * buf.shadow[idx] + 0.25 * (1 - buf.ao[idx]));
-  darkness = Math.max(0, Math.min(1, darkness + materialDarknessShift(buf, idx)));
+  const darkness = computeDarkness(buf, idx);
   const T = [0, 0.30, 0.55, 0.78];
   return darkness > T[offset];
 }
@@ -4073,9 +4054,7 @@ function generateCellHatches(state, buf) {
         for (let sx = cellX0; sx < cellX1; sx += subStep) {
           const idx = bufIdx(buf, sx, sy);
           if (idx >= 0 && buf.surface[idx] === 1) {
-            let v = buf.light[idx] - materialDarknessShift(buf, idx);
-            v -= 0.45 * buf.shadow[idx] + 0.20 * (1 - buf.ao[idx]);
-            total += Math.max(0, Math.min(1, v));
+            total += 1 - computeDarkness(buf, idx);
             count++;
           }
         }
@@ -4155,12 +4134,7 @@ function generateTspHatches(state, buf) {
     for (let sx = SX_MIN; sx <= SX_MAX; sx += seedStep) {
       const idx = bufIdx(buf, sx, sy);
       if (idx < 0 || buf.surface[idx] !== 1) continue;
-      const darkness = Math.min(1, Math.max(0,
-        (1 - buf.light[idx]) +
-        0.50 * buf.shadow[idx] +
-        0.20 * (1 - buf.ao[idx]) +
-        materialDarknessShift(buf, idx)
-      ));
+      const darkness = computeDarkness(buf, idx);
       // 12 % minimum so highlights get sparse coverage (not pure white).
       const keepProb = Math.max(0.12, Math.pow(darkness, 1.4));
       if (hash01(sx, sy) > keepProb) continue;
@@ -4258,12 +4232,7 @@ function generateMonetHatches(state, buf) {
     for (let sx = SX_MIN; sx <= SX_MAX; sx += seedStep) {
       const idx = bufIdx(buf, sx, sy);
       if (idx < 0 || buf.surface[idx] !== 1) continue;
-      const darkness = Math.min(1, Math.max(0,
-        (1 - buf.light[idx]) +
-        0.50 * buf.shadow[idx] +
-        0.20 * (1 - buf.ao[idx]) +
-        materialDarknessShift(buf, idx)
-      ));
+      const darkness = computeDarkness(buf, idx);
       // Probability of placing a stroke = darkness^1.8 — a steeper
       // exponent than the old linear curve so mid-tones thin out fast
       // while only the genuinely dark regions stay densely stroked.
@@ -4344,11 +4313,7 @@ function generateCrosshatchHatches(state, buf) {
         if (inBounds) {
           const idx = bufIdx(buf, sx, sy);
           if (idx >= 0 && buf.surface[idx] === 1) {
-            const darkness = (1 - buf.light[idx]) +
-                             0.50 * buf.shadow[idx] +
-                             0.20 * (1 - buf.ao[idx]) +
-                             materialDarknessShift(buf, idx);
-            draw = darkness > L.threshold;
+            draw = computeDarkness(buf, idx) > L.threshold;
           }
         }
         if (draw) {
@@ -4408,15 +4373,7 @@ function generateVerticalHatches(state, buf) {
         const idx = bufIdx(buf, sx, sy);
         let draw = false;
         if (idx >= 0 && buf.surface[idx] === 1) {
-          if (L.threshold < 0) {
-            draw = true;
-          } else {
-            const dark = (1 - buf.light[idx]) +
-                         0.50 * buf.shadow[idx] +
-                         0.20 * (1 - buf.ao[idx]) +
-                         materialDarknessShift(buf, idx);
-            draw = dark > L.threshold;
-          }
+          draw = L.threshold < 0 || computeDarkness(buf, idx) > L.threshold;
         }
         if (draw) {
           if (!inDraw) { sy0 = sy; inDraw = true; }
@@ -4450,8 +4407,8 @@ function applyBeamMask(buf, spec) {
   // (targetSx/targetSy) as a back-compat fallback.
   let bdx, bdy;
   if (spec.dirSx != null || spec.dirSy != null) {
-    bdx = spec.dirSx || 0;
-    bdy = spec.dirSy || 0;
+    bdx = spec.dirSx != null ? spec.dirSx : 0;
+    bdy = spec.dirSy != null ? spec.dirSy : 0;
   } else {
     bdx = (spec.targetSx != null ? spec.targetSx : -aSx) - aSx;
     bdy = (spec.targetSy != null ? spec.targetSy : aSy + 1.0) - aSy;
@@ -4459,7 +4416,7 @@ function applyBeamMask(buf, spec) {
   const bMag = Math.hypot(bdx, bdy);
   if (bMag < 1e-6) return;
   bdx /= bMag; bdy /= bMag;
-  const cosHalf = Math.cos((spec.halfAngleDeg || 12) * Math.PI / 180);
+  const cosHalf = Math.cos((spec.halfAngleDeg != null ? spec.halfAngleDeg : 12) * Math.PI / 180);
   const W = buf.W, H = buf.H;
   for (let py = 0; py < H; py++) {
     const sy = SY_MAX - (py / (H - 1)) * (SY_MAX - SY_MIN);
@@ -4697,7 +4654,8 @@ function generateCurveHatches(state, buf, fieldFn) {
     { factor: 0.45, threshold: 0.55 },  // level 3
     { factor: 0.30, threshold: 0.75 }   // level 4
   ];
-  const occ2 = new Uint8Array(W * H);
+  // Re-use the SAME `occ` grid the main pass populated, so densification
+  // strokes can't sit directly on top of main-pass streamlines.
   for (const layer of densificationLayers) {
     const sepPx2 = Math.max(1.5, spacingPx * layer.factor);
     const sepSqr2 = sepPx2 * sepPx2;
@@ -4707,9 +4665,7 @@ function generateCurveHatches(state, buf, fieldFn) {
       if (ix < 0 || ix >= W || iy < 0 || iy >= H) return false;
       if (buf.surface[iy * W + ix] !== 1) return false;
       const i = iy * W + ix;
-      const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] +
-                   0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
-      if (dark < darkThreshold) return false;
+      if (computeDarkness(buf, i) < darkThreshold) return false;
       const r = Math.ceil(sepPx2);
       const x0 = Math.max(0, ix - r), x1 = Math.min(W - 1, ix + r);
       const y0 = Math.max(0, iy - r), y1 = Math.min(H - 1, iy + r);
@@ -4718,7 +4674,7 @@ function generateCurveHatches(state, buf, fieldFn) {
         for (let x = x0; x <= x1; x++) {
           const dx = x - ix;
           if (dx * dx + dy * dy > sepSqr2) continue;
-          if (occ2[y * W + x]) return false;
+          if (occ[y * W + x]) return false;
         }
       }
       return true;
@@ -4732,11 +4688,9 @@ function generateCurveHatches(state, buf, fieldFn) {
         if (ix < 0 || ix >= W || iy < 0 || iy >= H) break;
         if (buf.surface[iy * W + ix] !== 1) break;
         const i = iy * W + ix;
-        const dark = (1 - buf.light[i]) + 0.50 * buf.shadow[i] +
-                     0.20 * (1 - buf.ao[i]) + materialDarknessShift(buf, i);
         // Trace allowed to taper slightly past the threshold so lines
         // end gracefully into lit regions.
-        if (dark < darkThreshold - 0.10) break;
+        if (computeDarkness(buf, i) < darkThreshold - 0.10) break;
         const f = fieldFn(buf, ix, iy);
         if (!f) break;
         let dx = f[0] * dirSign;
@@ -4749,7 +4703,7 @@ function generateCurveHatches(state, buf, fieldFn) {
         if (stepsSinceSeed > sepPx2 * 0.6) {
           const px2 = Math.round(px), py2 = Math.round(py);
           if (px2 < 0 || px2 >= W || py2 < 0 || py2 >= H) break;
-          if (occ2[py2 * W + px2]) break;
+          if (occ[py2 * W + px2]) break;
         }
         points.push([px, py]);
       }
@@ -4768,7 +4722,7 @@ function generateCurveHatches(state, buf, fieldFn) {
         if (merged.length < 3) continue;
         for (const [pxp, pyp] of merged) {
           const ix = Math.round(pxp), iy = Math.round(pyp);
-          if (ix >= 0 && ix < W && iy >= 0 && iy < H) occ2[iy * W + ix] = 1;
+          if (ix >= 0 && ix < W && iy >= 0 && iy < H) occ[iy * W + ix] = 1;
         }
         paths.push(merged.map(p => bufPxToScreen(buf, p[0], p[1])));
       }
@@ -6351,6 +6305,16 @@ function syncFromUrl() {
     const el = document.getElementById(k);
     if (el && params.has(k)) el.value = params.get(k);
   }
+  // Per-scene dynamic inputs: render them above, then copy any URL params
+  // that match the active scene's UI schema into those inputs.
+  const activeScene = document.getElementById('scene').value;
+  const scene = SCENES[activeScene];
+  if (scene && scene.ui && Array.isArray(scene.ui)) {
+    for (const c of scene.ui) {
+      const el = document.getElementById(c.id);
+      if (el && params.has(c.id)) el.value = params.get(c.id);
+    }
+  }
 }
 function writeUrl(state) {
   const params = new URLSearchParams();
@@ -6359,6 +6323,16 @@ function writeUrl(state) {
                 'brightness','contrast','gamma','posterLevels',
                    'cloudThreshold']) {
     if (state[k] != null) params.set(k, state[k]);
+  }
+  // Per-scene params: walk the active scene's UI schema and write any
+  // current input values. These match `syncFromUrl`'s read so links can
+  // round-trip scene-specific controls (rockScale, etc.).
+  const scene = SCENES[state.scene];
+  if (scene && scene.ui && Array.isArray(scene.ui)) {
+    for (const c of scene.ui) {
+      const el = document.getElementById(c.id);
+      if (el && el.value !== '') params.set(c.id, el.value);
+    }
   }
   if (state.scene === 'builder') {
     params.set('builder', serialiseBuilder());
