@@ -46,13 +46,11 @@
     <div class="field"><label>Scene</label>
       <select id="scene">
         <option value="single" selected>Single blob</option>
-        <option value="builder">Scene builder</option>
         <option value="monoliths">Monoliths</option>
         <option value="stonehenge">Stonehenge</option>
         <option value="arch">Cave arch</option>
         <option value="lighthouse">Lighthouse</option>
         <option value="cairn">Cairn</option>
-        <option value="iceberg">Iceberg</option>
         <option value="pyramid">Pyramid</option>
         <option value="twistedColumn">Twisted column</option>
         <option value="recursiveTower">Recursive tower</option>
@@ -1255,15 +1253,15 @@ const SCENES = {
       let scene = sdfUnion(parts, 0);
       scene = roughenSDF(scene, state.seed + ':stonehengeNoise',
                          params.roughness, [5, 14, 32], [0.55, 0.30, 0.15]);
-      return { sdf: scene, camera: { tiltDeg: 22, yawDeg: 0, distance: 3.5 } };
+      return { sdf: scene, camera: { tiltDeg: 12, yawDeg: 0, distance: 2.8 } };
     }
   },
   arch: {
     ui: [
       { id: 'rockSpheres',     label: 'Rock spheres',   type: 'int',    min: 5,    max: 14,   step: 1,    default: 8    },
-      { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.50, max: 2.00, step: 0.05, default: 1.05 },
-      { id: 'rockVerticality', label: 'Rock vert.',     type: 'number', min: 0.40, max: 2.00, step: 0.10, default: 0.95 },
-      { id: 'rockSpread',      label: 'Rock spread',    type: 'number', min: 0.50, max: 2.00, step: 0.05, default: 1.15 },
+      { id: 'rockScale',       label: 'Rock scale',     type: 'number', min: 0.50, max: 2.00, step: 0.05, default: 1.20 },
+      { id: 'rockVerticality', label: 'Rock vert.',     type: 'number', min: 0.40, max: 2.00, step: 0.10, default: 0.85 },
+      { id: 'rockSpread',      label: 'Rock spread',    type: 'number', min: 0.50, max: 2.50, step: 0.05, default: 1.70 },
       { id: 'rockSmoothK',     label: 'Rock smooth K',  type: 'number', min: 0.05, max: 0.60, step: 0.02, default: 0.22 },
       { id: 'rockPointiness',  label: 'Pointiness',     type: 'number', min: 0.00, max: 0.70, step: 0.05, default: 0.05 },
       { id: 'rockJaggedness',  label: 'Rock jaggedness',type: 'number', min: 0.00, max: 0.20, step: 0.005, default: 0.09 },
@@ -1271,23 +1269,18 @@ const SCENES = {
       { id: 'archDepth',       label: 'Arch depth',     type: 'number', min: 0.30, max: 1.50, step: 0.05, default: 0.80 }
     ],
     build: function (rng, state, params) {
-      // Sea-stack arch (Hvítserkur / Étretat style) — a SINGLE smooth
-      // textured blob rising as a vertical pillar from the water, with
-      // a tunnel carved at the waterline. The rock is composed from
-      // smooth ellipsoidal spheres (makeBlobSDFAt), not octahedra, so
-      // the silhouette reads as weathered sea-cliff basalt rather than
-      // a faceted crystal stack. Noise displacement adds surface
-      // texture without changing the overall pillar form.
+      // Sea-stack arch (Hvítserkur / Étretat style) — a single smooth
+      // textured blob rising as a wide rock with a tunnel carved through
+      // at the waterline. The rock is composed from smooth ellipsoidal
+      // spheres (makeBlobSDFAt) so the silhouette reads as weathered
+      // sea-cliff basalt. Noise displacement adds surface texture.
       //
-      // Defaults: spread 0.65 (narrower than the lighthouse rocks),
-      // verticality 1.80 (taller than wide). The result is a
-      // sea-stack column with water visibly on BOTH sides — the arch
-      // genuinely punches THROUGH the pillar at the waterline,
-      // instead of the previous wide-base rock that sat half on the
-      // ground plane.
+      // Defaults: spread 1.70 + verticality 0.85 — a rock noticeably
+      // wider than it is tall, so the 0.30-radius arch tunnel has
+      // enough rock on either side to punch THROUGH cleanly instead
+      // of eating most of the silhouette.
       //
-      // Pair with groundStyle = waves for the strongest sea-stack
-      // feel.
+      // Pair with groundStyle = waves for the strongest sea-stack feel.
       let base = makeBlobSDFAt(rng, {
         center: [0, 0.05, 0],
         nSpheres: params.rockSpheres,
@@ -1486,7 +1479,7 @@ const SCENES = {
     ui: [
       { id: 'stacks',         label: 'Stacks',         type: 'int',    min: 3,    max: 9,    step: 1,    default: 5    },
       { id: 'shardsPerStack', label: 'Shards/stack',   type: 'int',    min: 3,    max: 8,    step: 1,    default: 5    },
-      { id: 'baseScale',      label: 'Base scale',     type: 'number', min: 0.15, max: 0.50, step: 0.02, default: 0.32 },
+      { id: 'baseScale',      label: 'Base scale',     type: 'number', min: 0.20, max: 0.80, step: 0.02, default: 0.56 },
       { id: 'taper',          label: 'Taper',          type: 'number', min: 0.10, max: 0.85, step: 0.05, default: 0.55 },
       { id: 'flatness',       label: 'Flatness',       type: 'number', min: 0.30, max: 1.20, step: 0.05, default: 0.55 },
       { id: 'flatnessJitter', label: 'Flatness jitter',type: 'number', min: 0.00, max: 0.60, step: 0.05, default: 0.30 },
@@ -1532,9 +1525,10 @@ const SCENES = {
         // weathered silhouette and the gaps between rocks stay visible.
         rock = roughenSDF(rock, state.seed + ':cairnRock' + i, params.jaggedness);
         rocks.push(rock);
-        // Slightly larger stack step (1.30 → 1.45) so adjacent rocks
-        // overlap less; the gap between them reads as a visible seam.
-        cy += scale * flatnessHere * 1.45;
+        // Step between rocks: <1 = heavy overlap (rocks blend), 1 = touching,
+        // >1 = visible gap. ~1.10 leaves a thin seam where the rocks meet
+        // without floating apart.
+        cy += scale * flatnessHere * 1.10;
       }
       // Sharp union — each rock silhouette stays distinct.
       const cairn = sdfUnion(rocks, 0);
