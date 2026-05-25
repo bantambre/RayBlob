@@ -289,7 +289,8 @@ window.addEventListener('message', function (e) {
     return;
   }
   if (data.type === 'rayblob:result' ||
-      data.type === 'rayblob:defaultStateResult') {
+      data.type === 'rayblob:defaultStateResult' ||
+      data.type === 'rayblob:visibleScenesResult') {
     const cb = pendingRequests[data.requestId];
     if (!cb) return;
     delete pendingRequests[data.requestId];
@@ -398,19 +399,17 @@ async function run() {
     return;
   }
   // Filter out cases that reference scenes hidden from the main app's
-  // scene dropdown — the gallery should mirror what's user-facing in
-  // the app, not surface scenes that have been hidden.
-  const visibleScenes = (function () {
-    try {
-      const sel = iframe.contentDocument && iframe.contentDocument.getElementById('scene');
-      if (!sel) return null;
-      return new Set(Array.from(sel.options).map(function (o) { return o.value; }));
-    } catch (e) { return null; }
-  })();
-  if (visibleScenes) {
+  // scene dropdown — the gallery mirrors what's user-facing in the app.
+  // Fetched via postMessage because file:// blocks iframe.contentDocument.
+  try {
+    const reply = await callIframe({ type: 'rayblob:visibleScenes' });
+    const visible = new Set(reply.scenes || []);
     cases = cases.filter(function (c) {
-      return !c.state || !c.state.scene || visibleScenes.has(c.state.scene);
+      return !c.state || !c.state.scene || visible.has(c.state.scene);
     });
+  } catch (e) {
+    // Non-fatal — if the iframe didn't reply, just show every card.
+    console.warn('visibleScenes filter skipped:', e);
   }
   // Object.assign({}, ...) — start fresh so leftover keys from a previous
   // run don't leak into baseDefault (which is cached across runs).

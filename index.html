@@ -6311,6 +6311,16 @@ window.addEventListener('message', function (e) {
       type: 'rayblob:defaultStateResult', requestId: data.requestId,
       state: defaultState()
     }, '*');
+  } else if (data.type === 'rayblob:visibleScenes') {
+    // Reports the scene <select>'s current option values so the gallery
+    // can filter out hidden scenes without breaching same-origin
+    // restrictions on iframe.contentDocument access (file:// blocks it).
+    const sel = document.getElementById('scene');
+    const ids = sel ? Array.from(sel.options).map(function (o) { return o.value; }) : [];
+    e.source.postMessage({
+      type: 'rayblob:visibleScenesResult', requestId: data.requestId,
+      scenes: ids
+    }, '*');
   }
 });
 // Announce readiness to the parent. The parent may not exist (when the
