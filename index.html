@@ -5905,13 +5905,10 @@ function buildPathD(paths, vbPaths) {
 
 // Builds the bottom-margin text polylines (already in viewBox coords).
 function buildBottomLabel(state, strokeCount) {
-  const skyEntry = SKY_STYLES[state.skyStyle];
-  const sky = skyEntry ? skyEntry.label.toLowerCase() : state.skyStyle;
-  const text = 'monument  /  ' + strokeCount + ' strokes  /  '
-             + sky + '  /  bre pettis';
+  const text = 'monument  /  ' + strokeCount + ' strokes  /  bre pettis';
   const baselineY = VB_H - 18;               // 18 vb above page bottom
   // Pick a scale that keeps the label inside the printable width even
-  // when the strokeCount runs to 5 digits or the sky-style label is long.
+  // when the strokeCount runs to 5 digits.
   const maxWidth = VB_W - 2 * MARGIN_VB;
   let scale = 0.032;                         // ~16 vb cap-height (preferred)
   let w = measureText(text, scale);
