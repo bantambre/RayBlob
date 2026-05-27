@@ -1,0 +1,3602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RayBlob — 4×5" Hatched Blob</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; font: 12px/1.35 system-ui, sans-serif;
+         background: #1c1c1c; color: #ddd; }
+  .layout { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .panel { display: flex; flex-direction: column; gap: 4px;
+           width: 220px; padding: 12px;
+           background: #262626; border-radius: 6px; }
+  .panel h2 { margin: 6px 0 1px; font-size: 10px; font-weight: 600;
+              letter-spacing: 0.06em; text-transform: uppercase; color: #999; }
+  .field { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .field label { color: #aaa; font-size: 11px; }
+  .field input, .field select { width: 78px; padding: 3px 5px; background: #1a1a1a;
+                 color: #eee; border: 1px solid #3a3a3a; border-radius: 3px;
+                 font: inherit; font-size: 11px; text-align: right; }
+  .field input[type="text"] { text-align: left; }
+  .row { display: flex; gap: 6px; }
+  button { padding: 6px 8px; background: #3a78d8; color: white;
+           border: none; border-radius: 3px; cursor: pointer; font: inherit;
+           font-size: 11px; flex: 1; }
+  button:hover { background: #4a88e8; }
+  button.secondary { background: #444; }
+  button.secondary:hover { background: #555; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .stats { padding-top: 10px; margin-top: 6px; border-top: 1px solid #3a3a3a;
+           color: #888; font-size: 11px; line-height: 1.6;
+           font-family: ui-monospace, monospace; white-space: pre-wrap;
+           min-height: 32px; }
+  .stage { background: white; border-radius: 6px;
+           box-shadow: 0 6px 24px rgba(0,0,0,0.4); }
+  #preview { display: block; }
+  a.url-link { color: #6aa8ff; font-family: ui-monospace, monospace;
+               font-size: 10px; word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="panel">
+    <h2>Composition</h2>
+    <div class="field"><label>Seed</label><input id="seed" type="text" value="42"></div>
+
+    <h2 id="sceneParamsHeader" style="display:none">Scene parameters</h2>
+    <div id="sceneParamsPanel"></div>
+    <div class="field"><label>Ground style</label>
+      <select id="groundStyle"
+              style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
+        <option value="perspective" selected>Perspective</option>
+        <option value="waves">Waves</option>
+        <option value="sandGarden">Sand garden</option>
+      </select>
+    </div>
+    <div class="field"><label>Sky style</label>
+      <select id="skyStyle"
+              style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
+        <option value="gradient" selected>Gradient</option>
+        <option value="wobbly">Wobbly lines</option>
+        <option value="multiGradient">Box gradient</option>
+        <option value="paperGrain">Paper grain</option>
+        <option value="arcs">Concentric arcs</option>
+        <option value="stars">Stars</option>
+      </select>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <button id="render">Render</button>
+      <button id="randomize" class="secondary">Random</button>
+      <button id="save" class="secondary">Save SVG</button>
+    </div>
+
+    <div class="stats" id="stats">Ready.</div>
+    <a class="url-link" id="permalink" href="#">permalink</a>
+    <a class="url-link" href="gallery.html" style="margin-top:4px">→ gallery</a>
+  </div>
+
+  <div class="stage">
+    <svg id="preview" width="480" height="600" viewBox="0 0 1200 1500"
+         xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ============================================================
+// Constants & coordinate system
+// ============================================================
+// SVG output: paper size in inches, viewBox at 300 units/inch. The
+// concrete paper size is configurable via the UI; setPaperSize() below
+// is the single point that keeps all derived values consistent.
+let W_IN = 4, H_IN = 5;
+let VB_W = 1200, VB_H = 1500;
+const MARGIN_VB = 60;
+
+// Screen-space coords. sx ∈ [-1, 1] regardless of paper, sy extends
+// proportionally so the aspect matches the paper (positive sy = UP).
+const SX_MIN = -1, SX_MAX = 1;
+let SY_MIN = -1.25, SY_MAX = 1.25;
+
+// Paper-size registry — string id → {w, h} in inches. Add a new entry
+// + an <option> in the paperSize <select> to expose another size.
+const PAPER_SIZES = {
+  '4x5':  { w: 4, h: 5  },
+  '4x6':  { w: 4, h: 6  },
+  '5x7':  { w: 5, h: 7  },
+  '8x10': { w: 8, h: 10 },
+  '9x12': { w: 9, h: 12 }
+};
+
+// Set the active paper size and recompute everything that derives from
+// it (viewBox, sy range, world-per-mm). Call before each render whenever
+// state.paperSize changes.
+function setPaperSize(wIn, hIn) {
+  W_IN = wIn; H_IN = hIn;
+  VB_W = Math.round(wIn * 300); VB_H = Math.round(hIn * 300);
+  // SY range is centred at 0 and scales with paper aspect (SX range stays [-1, 1]).
+  const halfSY = hIn / wIn;
+  SY_MIN = -halfSY; SY_MAX = halfSY;
+  // 1 sx-unit spans wIn/2 inches; WORLD_PER_MM = 1 / (wIn/2 * 25.4) = 2 / (wIn * 25.4).
+  WORLD_PER_MM = 2.0 / (wIn * 25.4);
+}
+
+// Camera position is fixed; the *direction* changes with `camTilt`, so the
+// horizon position on screen is configurable. These F/R/U vectors are
+// recomputed at render time by setupCamera().
+// Camera position and focal distance — `let` so scenes can override them
+// per-render through `setupCamera({ pos, focal, tiltDeg })`. Defaults work
+// for the standard "subject on a horizon" composition.
+let CAM = [0, 0, -5];
+let FOCAL = 4;
+const GROUND_Y = -0.5;
+let camF = [0, 0, 1];
+let camR = [1, 0, 0];
+let camU = [0, 1, 0];
+let syHorizon = 0;
+
+// `opts` is an object: { tiltDeg, yawDeg, distance, pos: [x,y,z], focal }.
+// Defaults: tilt 0, yaw 0, distance 5 (camera orbits at this radius around
+// the origin in the xz plane). `pos` overrides the orbit math entirely.
+function setupCamera(opts) {
+  opts = opts || {};
+  const tiltDeg = opts.tiltDeg != null ? opts.tiltDeg : 0;
+  const yawDeg  = opts.yawDeg  != null ? opts.yawDeg  : 0;
+  const dist    = opts.distance != null ? opts.distance : 5;
+  const tilt = tiltDeg * Math.PI / 180;
+  const yaw  = yawDeg  * Math.PI / 180;
+  const sy_ = Math.sin(yaw), cy_ = Math.cos(yaw);
+  const st_ = Math.sin(tilt), ct_ = Math.cos(tilt);
+  // Orbit: yaw=0 → camera at (0, 0, -dist) (legacy default).
+  if (opts.pos) CAM = opts.pos.slice();
+  else          CAM = [dist * sy_, 0, -dist * cy_];
+  FOCAL = opts.focal != null ? opts.focal : 4;
+  // Yaw-then-pitch camera basis. F points from CAM toward the origin
+  // (modulo the pitch).
+  camF = [-sy_ * ct_, st_, cy_ * ct_];
+  camR = [ cy_,       0,   sy_      ];
+  // U = F × R for right-handed +y-up
+  camU = [
+    camF[1] * camR[2] - camF[2] * camR[1],
+    camF[2] * camR[0] - camF[0] * camR[2],
+    camF[0] * camR[1] - camF[1] * camR[0]
+  ];
+  // Horizon on screen: where the world-y component of the ray is zero.
+  syHorizon = -camF[1] * FOCAL / camU[1];
+}
+
+// Named camera poses. Scenes can `return { sdf, camera: CAMERA.hero }` for
+// a standard horizon-line composition (mostly used for ground-based forms)
+// or use one of the alternates. Scene-specific compositions still pass
+// their own `{ tiltDeg, yawDeg, distance }` literals where the framing is
+// genuinely bespoke.
+const CAMERA = {
+  hero:        { tiltDeg: 6 },                       // standard horizon, looking at a ground-anchored form
+  threeQuarter:{ tiltDeg: 6,  yawDeg: 22 },          // hero pose with a slight off-axis turn
+  closeUp:     { tiltDeg: 14, yawDeg: 22 },          // closer, more vertical (polyhedron-style)
+  topDown:     { tiltDeg: 22, yawDeg: 18 }           // dramatic looking-down (UFO/mengerSponge)
+};
+
+// Hatching: 4 fixed screen-space angles, picked per-pixel from the projected
+// surface normal of the blob.
+const HATCH_ANGLES = [0, Math.PI / 4, Math.PI / 2, 3 * Math.PI / 4];
+
+// Per-pixel material id (buf.material[idx]) is set by scenes via their
+// materialFn. Each id selects a row of MATERIAL_PROPS that shifts the
+// hatcher's per-pixel darkness up or down — positive shifts more hatching
+// (denser/darker), negative shifts less (sparser/lighter). 0 is the
+// default and has no effect, so scenes that don't set material at all
+// render exactly as before.
+const MATERIAL_PROPS = [
+  { darknessShift:  0.00 },  // 0: default
+  { darknessShift:  0.30 },  // 1: dense / shadowed (e.g. underwater)
+  { darknessShift: -0.30 },  // 2: bright / sparse (e.g. ice in sun)
+  { darknessShift:  0.18 },  // 3: medium dense
+  { darknessShift: -0.18 },  // 4: medium sparse
+  { darknessShift:  0.45 },  // 5: very dense (near-solid black)
+  { darknessShift: -0.45 }   // 6: very sparse (near highlights only)
+];
+function materialDarknessShift(buf, idx) {
+  const m = buf.material[idx];
+  const p = MATERIAL_PROPS[m];
+  return p ? p.darknessShift : 0;
+}
+
+// Cheap deterministic [0,1) hash from (sx, sy). Used by hatchers that
+// need a per-position dropout probability.
+function hash01(sx, sy) {
+  const h = Math.sin(sx * 1234.5 + sy * 5678.9 + 0.137) * 43758.5;
+  return h - Math.floor(h);
+}
+
+// Canonical per-pixel darkness for the blob surface, in [0, 1]:
+// Lambert (inverted) + soft-shadow penumbra + AO contribution + material shift.
+// Every hatcher should call this; tonal-curve tweaks happen in one place.
+function computeDarkness(buf, idx) {
+  return Math.max(0, Math.min(1,
+    (1 - buf.light[idx]) +
+    0.50 * buf.shadow[idx] +
+    0.20 * (1 - buf.ao[idx]) +
+    materialDarknessShift(buf, idx)
+  ));
+}
+
+// Width of one sx-unit in mm, derived from current paper width. Updated
+// by setPaperSize() — `let` so it tracks the active paper.
+let WORLD_PER_MM = 2.0 / (W_IN * 25.4);
+
+// ============================================================
+// PRNG
+// ============================================================
+function hashSeed(s) {
+  s = String(s);
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+function makeRng(seed) {
+  let s = hashSeed(seed);
+  return function () {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ============================================================
+// SDF
+// ============================================================
+function sphereSDF(x, y, z, c, r) {
+  const dx = x - c[0], dy = y - c[1], dz = z - c[2];
+  return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+}
+function smin(a, b, k) {
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.min(a, b) - h * h * k * 0.25;
+}
+// Position-aware blob SDF — multiple of these can be composed via
+// sdfUnion() to build "multiple blobs in a scene" (Monoliths, Forest,
+// Cacti, Skyline, …). Each blob picks its own random lobes from `rng`.
+//
+//   opts = {
+//     center:      [x, y, z]   (default [0,0,0])
+//     nSpheres:    int         lobes incl. central anchor
+//     smoothK:     0..0.8      smooth-min radius
+//     spread:      0..3        horizontal/radial offset multiplier
+//     verticality: 0.4..3      world-y stretch (taller > 1)
+//     pointiness:  0..2        upper-lobe taper for sea-stack/cone forms
+//     scale:       any         overall size multiplier
+//   }
+function makeBlobSDFAt(rng, opts) {
+  const center = opts.center || [0, 0, 0];
+  const nSpheres = opts.nSpheres || 4;
+  const smoothK = opts.smoothK == null ? 0.3 : opts.smoothK;
+  const spread = opts.spread == null ? 1 : opts.spread;
+  const V = opts.verticality == null ? 1 : opts.verticality;
+  const P = opts.pointiness || 0;
+  const sc = opts.scale == null ? 1 : opts.scale;
+
+  const spheres = [];
+  spheres.push({ c: center.slice(), r: (0.4 + rng() * 0.15) * sc });
+  for (let i = 1; i < nSpheres; i++) {
+    const cyRaw = ((rng() - 0.5) * 0.6 * spread) * V * sc;
+    const taper = cyRaw > 0 ? Math.max(0.15, 1 - P * cyRaw) : 1;
+    spheres.push({
+      c: [
+        center[0] + (rng() - 0.5) * 0.7 * spread * taper * sc,
+        center[1] + cyRaw,
+        center[2] + (rng() - 0.5) * 0.5 * spread * taper * sc
+      ],
+      r: (0.22 + rng() * 0.25) * Math.max(0.3, taper) * sc
+    });
+  }
+  return function (x, y, z) {
+    function ell(c, r) {
+      const dx = x - c[0];
+      const dy = (y - c[1]) / V;
+      const dz = z - c[2];
+      return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+    }
+    let d = ell(spheres[0].c, spheres[0].r);
+    for (let i = 1; i < spheres.length; i++) {
+      d = smin(d, ell(spheres[i].c, spheres[i].r), smoothK);
+    }
+    return d;
+  };
+}
+
+// Octahedral analogue of makeBlobSDFAt — same parameter shape (centre,
+// nSpheres, smoothK, spread, verticality, pointiness, scale) but each
+// primitive is an octahedron instead of an ellipsoidal sphere. With
+// smoothK ≈ 0 the union preserves the diamond-face silhouettes, so the
+// result reads as a faceted/edgy rock instead of a soft blob.
+//
+// Extras to break the "all-pyramids" silhouette pattern:
+//   - randomRotate (default true): each shard is rotated by a random
+//     angle around Y plus small tilts around X and Z, so vertices land
+//     in different directions instead of aligning into a regular pyramid
+//     grid.
+//   - roundMix (0..1, default 0): fraction of shards (excluding the
+//     central one) rendered as spheres instead of octahedra, giving a
+//     mix of faceted + weathered rock surfaces.
+function makeOctahedralBlobAt(rng, opts) {
+  const center  = opts.center || [0, 0, 0];
+  const n       = opts.nSpheres || 4;
+  const smoothK = opts.smoothK == null ? 0 : opts.smoothK;
+  const spread  = opts.spread  == null ? 1 : opts.spread;
+  const V       = opts.verticality == null ? 1 : opts.verticality;
+  const P       = opts.pointiness || 0;
+  const sc      = opts.scale == null ? 1 : opts.scale;
+  const randomRotate = opts.randomRotate !== false;
+  const roundMix     = opts.roundMix == null ? 0 : opts.roundMix;
+  const shards = [];
+  // Central shard: always an octahedron, axis-aligned so the form has
+  // a stable centre of mass even with random rotation on the others.
+  shards.push(makeOctahedron(
+    center[0], center[1], center[2],
+    (0.40 + rng() * 0.15) * sc
+  ));
+  for (let i = 1; i < n; i++) {
+    const cyRaw = ((rng() - 0.5) * 0.6 * spread) * V * sc;
+    const taper = cyRaw > 0 ? Math.max(0.15, 1 - P * cyRaw) : 1;
+    const cx = center[0] + (rng() - 0.5) * 0.7 * spread * taper * sc;
+    const cy = center[1] + cyRaw;
+    const cz = center[2] + (rng() - 0.5) * 0.5 * spread * taper * sc;
+    const sz = (0.22 + rng() * 0.25) * Math.max(0.3, taper) * sc;
+    // Decide primitive: sphere with probability roundMix, otherwise oct.
+    const useSphere = (rng() < roundMix);
+    if (useSphere) {
+      // Spheres need no rotation (rotational symmetry).
+      shards.push(makeSphere(cx, cy, cz, sz));
+    } else if (randomRotate) {
+      // Random Y rotation (full 0..2π) + small X / Z tilts (±0.35 rad ≈
+      // ±20°) so the octahedron's vertices land in unique directions.
+      const ay = rng() * Math.PI * 2;
+      const ax = (rng() - 0.5) * 0.70;
+      const az = (rng() - 0.5) * 0.70;
+      let o = makeOctahedron(0, 0, 0, sz);
+      o = rotateY(o, ay);
+      if (ax !== 0) o = rotateX(o, ax);
+      if (az !== 0) o = rotateZ(o, az);
+      o = translate(o, cx, cy, cz);
+      shards.push(o);
+    } else {
+      shards.push(makeOctahedron(cx, cy, cz, sz));
+    }
+  }
+  return sdfUnion(shards, smoothK);
+}
+
+// ============================================================
+// SDF composition engines
+// ============================================================
+// Union of multiple SDFs. `smoothK > 0` → smooth-min blending (good for
+// organic forms that flow into each other). `smoothK = 0` → sharp
+// Math.min (good for visually distinct objects).
+function sdfUnion(sdfs, smoothK) {
+  if (sdfs.length === 0) return function () { return Infinity; };
+  if (sdfs.length === 1) return sdfs[0];
+  if (smoothK > 0) {
+    return function (x, y, z) {
+      let d = sdfs[0](x, y, z);
+      for (let i = 1; i < sdfs.length; i++) {
+        d = smin(d, sdfs[i](x, y, z), smoothK);
+      }
+      return d;
+    };
+  }
+  return function (x, y, z) {
+    let d = sdfs[0](x, y, z);
+    for (let i = 1; i < sdfs.length; i++) {
+      const e = sdfs[i](x, y, z);
+      if (e < d) d = e;
+    }
+    return d;
+  };
+}
+
+// Intersect a list of SDFs — `result = max(d0, d1, …)`. Inside = where ALL
+// component SDFs are inside.
+function sdfIntersect(sdfs) {
+  return function (x, y, z) {
+    let d = -Infinity;
+    for (let i = 0; i < sdfs.length; i++) {
+      const di = sdfs[i](x, y, z);
+      if (di > d) d = di;
+    }
+    return d;
+  };
+}
+
+// Plane carving — subtract each carver from base. `result = max(base, -c0, -c1, …)`.
+// Useful for arches, cave mouths, windows, valleys.
+function sdfSubtract(base, carvers) {
+  if (!carvers || carvers.length === 0) return base;
+  return function (x, y, z) {
+    let d = base(x, y, z);
+    for (let i = 0; i < carvers.length; i++) {
+      const c = -carvers[i](x, y, z);
+      if (c > d) d = c;
+    }
+    return d;
+  };
+}
+
+// Axis-aligned box (optionally rounded). cx,cy,cz = centre; hx,hy,hz = half-sizes.
+// `round` shrinks the box by `round` and adds it back as a fillet — set to 0 for
+// sharp corners.
+function makeBox(cx, cy, cz, hx, hy, hz, round) {
+  const r = round || 0;
+  const hxR = hx - r, hyR = hy - r, hzR = hz - r;
+  return function (x, y, z) {
+    const dx = Math.abs(x - cx) - hxR;
+    const dy = Math.abs(y - cy) - hyR;
+    const dz = Math.abs(z - cz) - hzR;
+    const ox = Math.max(dx, 0), oy = Math.max(dy, 0), oz = Math.max(dz, 0);
+    const outside = Math.sqrt(ox * ox + oy * oy + oz * oz);
+    const inside = Math.min(Math.max(dx, Math.max(dy, dz)), 0);
+    return outside + inside - r;
+  };
+}
+
+// Finite cone with apex at (cx, cy_apex, cz), base disk at y = cy_base with
+// radius r_base. `cy_apex > cy_base` for an upward-pointing cone (pyramid /
+// rocket-cone shape); pass `cy_apex < cy_base` for a downward-pointing cone.
+function makeConeY(cx, cy_apex, cy_base, cz, r_base) {
+  const apexUp = cy_apex > cy_base;
+  const h = Math.abs(cy_apex - cy_base);
+  const slantLen = Math.sqrt(r_base * r_base + h * h);
+  return function (x, y, z) {
+    const dx = x - cx, dz = z - cz;
+    const dxz = Math.sqrt(dx * dx + dz * dz);
+    const py = y - cy_apex;
+
+    // Past the apex point (outside the cone, on the pointy side):
+    if (apexUp ? (py > 0) : (py < 0)) {
+      return Math.sqrt(dxz * dxz + py * py);
+    }
+    // Past the base disk (outside the cone, on the open side):
+    if (apexUp ? (y < cy_base) : (y > cy_base)) {
+      const dxDisk = Math.max(0, dxz - r_base);
+      const dy = y - cy_base;
+      return Math.sqrt(dxDisk * dxDisk + dy * dy);
+    }
+    // Within the cone's height range — signed distance to the slant surface.
+    return (dxz * h - Math.abs(py) * r_base) / slantLen;
+  };
+}
+
+// Square pyramid: square base of `halfSide` half-length centered at
+// (cx, cy_base, cz), apex straight above at (cx, cy_base + height, cz).
+// SDF = max of the four slanted-face half-spaces + the base plane —
+// not a true Euclidean SDF (it under-estimates near edges) but it's
+// a valid Lipschitz SDF that raymarches correctly.
+function makePyramidSquare(cx, cy_base, cz, halfSide, height) {
+  const s = halfSide;
+  const h = height;
+  const norm = Math.sqrt(h * h + s * s) || 1;
+  return function (x, y, z) {
+    const px = x - cx;
+    const py = y - cy_base;
+    const pz = z - cz;
+    // Mirror through the diagonal symmetry of the square so we only have
+    // to evaluate two slant planes instead of four.
+    const ax = Math.abs(px);
+    const az = Math.abs(pz);
+    // Slanted faces: outward normal (h, s, 0)/norm and (0, s, h)/norm.
+    // Plane SDF = (h*|p| + s*y - h*s) / norm, positive outside.
+    const slantX = (h * ax + s * py - h * s) / norm;
+    const slantZ = (h * az + s * py - h * s) / norm;
+    // Base half-space: y ≥ cy_base must hold; outward normal (0, -1, 0).
+    const base = -py;
+    return Math.max(slantX, slantZ, base);
+  };
+}
+
+// Half-space plane. Normal (nx, ny, nz) need not be unit-length; it gets
+// normalised internally. The plane passes through the point where
+// dot(p, n) + d = 0. SDF is positive on the +n side, negative on the -n side
+// — pass as a carver to `sdfSubtract` to slice a base SDF in half.
+function makePlane(nx, ny, nz, d) {
+  const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+  const ux = nx / len, uy = ny / len, uz = nz / len;
+  const ud = d / len;
+  return function (x, y, z) {
+    return x * ux + y * uy + z * uz + ud;
+  };
+}
+
+// Torus on the xz plane: major radius R, minor radius r.
+function makeTorus(cx, cy, cz, R, r) {
+  return function (x, y, z) {
+    const dx = x - cx, dz = z - cz;
+    const q = Math.sqrt(dx * dx + dz * dz) - R;
+    const dy = y - cy;
+    return Math.sqrt(q * q + dy * dy) - r;
+  };
+}
+
+// Sphere primitive.
+function makeSphere(cx, cy, cz, r) {
+  return function (x, y, z) {
+    const dx = x - cx, dy = y - cy, dz = z - cz;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  };
+}
+
+// Regular octahedron centred at (cx, cy, cz). `s` controls overall size —
+// the inscribed sphere has radius s × sqrt(1/3). This is the L1-ball
+// distance approximation; not a perfect Euclidean SDF, but accurate
+// enough for raymarched silhouette rendering.
+function makeOctahedron(cx, cy, cz, s) {
+  return function (x, y, z) {
+    return (Math.abs(x - cx) + Math.abs(y - cy) + Math.abs(z - cz) - s) * 0.5774;
+  };
+}
+
+// Y-axis-aligned finite cylinder from y=cy0 to y=cy1, axis at (cx, _, cz),
+// radius r. Standard "cylinder = (radial cap, axial cap)" combination.
+function makeCylinderY(cx, cy0, cy1, cz, r) {
+  return function (x, y, z) {
+    const dx = x - cx, dz = z - cz;
+    const dxz = Math.sqrt(dx * dx + dz * dz) - r;
+    const dyTop = y - cy1, dyBot = cy0 - y;
+    const dy = Math.max(dyTop, dyBot);
+    const outX = Math.max(dxz, 0), outY = Math.max(dy, 0);
+    const outside = Math.sqrt(outX * outX + outY * outY);
+    const inside = Math.min(Math.max(dxz, dy), 0);
+    return outside + inside;
+  };
+}
+
+// ============================================================
+// Tier 2: domain operators. Each wraps a base SDF and returns a new SDF.
+// ============================================================
+
+// 3-D smoothstep value-noise factory. Returns f(x, y, z) ∈ [0, 1].
+function makeNoise3D(seedKey) {
+  const rng = makeRng(seedKey);
+  const GS = 32;
+  const grid = new Float32Array(GS * GS * GS);
+  for (let i = 0; i < grid.length; i++) grid[i] = rng();
+  function idx3(x, y, z) {
+    return (x % GS) + (y % GS) * GS + (z % GS) * GS * GS;
+  }
+  return function n3(x, y, z) {
+    const ux = ((x % GS) + GS) % GS;
+    const uy = ((y % GS) + GS) % GS;
+    const uz = ((z % GS) + GS) % GS;
+    const ix = Math.floor(ux), iy = Math.floor(uy), iz = Math.floor(uz);
+    const fx = ux - ix, fy = uy - iy, fz = uz - iz;
+    const sx = fx * fx * (3 - 2 * fx);
+    const sy = fy * fy * (3 - 2 * fy);
+    const sz = fz * fz * (3 - 2 * fz);
+    const c000 = grid[idx3(ix,     iy,     iz    )];
+    const c100 = grid[idx3(ix + 1, iy,     iz    )];
+    const c010 = grid[idx3(ix,     iy + 1, iz    )];
+    const c110 = grid[idx3(ix + 1, iy + 1, iz    )];
+    const c001 = grid[idx3(ix,     iy,     iz + 1)];
+    const c101 = grid[idx3(ix + 1, iy,     iz + 1)];
+    const c011 = grid[idx3(ix,     iy + 1, iz + 1)];
+    const c111 = grid[idx3(ix + 1, iy + 1, iz + 1)];
+    const x00 = c000 + (c100 - c000) * sx;
+    const x10 = c010 + (c110 - c010) * sx;
+    const x01 = c001 + (c101 - c001) * sx;
+    const x11 = c011 + (c111 - c011) * sx;
+    const y0 = x00 + (x10 - x00) * sy;
+    const y1 = x01 + (x11 - x01) * sy;
+    return y0 + (y1 - y0) * sz;
+  };
+}
+
+// Surface displacement: roughen a smooth SDF by adding noise to its value.
+// `noiseFn` is expected in [0, 1]; it's centered before applying.
+// `amp` is the peak-to-peak displacement amplitude (≤ ~0.2 for raymarch
+// stability — large amps make the SDF non-Lipschitz and the raymarcher
+// overshoots).
+function displace(sdf, noiseFn, amp) {
+  return function (x, y, z) {
+    return sdf(x, y, z) + (noiseFn(x, y, z) - 0.5) * amp;
+  };
+}
+
+// 3-octave isotropic surface roughening. Standard pattern across rock /
+// stone / ice scenes. Caller supplies a seed key (so multiple instances
+// don't share noise), the displacement amplitude, and optionally per-
+// octave frequencies and weights. Default freqs/weights produce a
+// general-purpose "weathered stone" texture. amp ≤ 0 returns sdf
+// unchanged so callers don't need their own zero-guard.
+function roughenSDF(sdf, seedKey, amp, freqs, weights) {
+  if (amp <= 0) return sdf;
+  const F = freqs   || [6,    16,   38];
+  const W = weights || [0.50, 0.30, 0.20];
+  const n3 = makeNoise3D(seedKey);
+  return displace(sdf, function (x, y, z) {
+    return W[0] * n3(x * F[0], y * F[0], z * F[0]) +
+           W[1] * n3(x * F[1], y * F[1], z * F[1]) +
+           W[2] * n3(x * F[2], y * F[2], z * F[2]);
+  }, amp);
+}
+
+// Rotate the input position around the Y axis by `k * y` radians before
+// evaluating — twists any vertical form into a helix.
+// Generic position warp: offset the input p by a 3-vector returned by
+// `fn(x, y, z)` before evaluating. More general than twistY/bendY —
+// can do any sinusoidal/turbulent positional distortion.
+function warp(sdf, fn) {
+  return function (x, y, z) {
+    const w = fn(x, y, z);
+    return sdf(x + w[0], y + w[1], z + w[2]);
+  };
+}
+
+// Constant-angle rotations around each axis. `angle` is in radians.
+// The position is rotated by the inverse so the SHAPE is rotated by +angle.
+function rotateY(sdf, angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return function (x, y, z) {
+    return sdf(x * c + z * s, y, -x * s + z * c);
+  };
+}
+function rotateZ(sdf, angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return function (x, y, z) {
+    return sdf(x * c + y * s, -x * s + y * c, z);
+  };
+}
+function rotateX(sdf, angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return function (x, y, z) {
+    return sdf(x, y * c + z * s, -y * s + z * c);
+  };
+}
+
+// Translate an SDF by (dx, dy, dz). Pairs with rotate to place rotated
+// shapes anywhere in space.
+function translate(sdf, dx, dy, dz) {
+  return function (x, y, z) {
+    return sdf(x - dx, y - dy, z - dz);
+  };
+}
+
+// Domain repetition: wrap each axis by its period before evaluating, so
+// a single SDF tiles infinitely along that axis. period <= 0 disables
+// repetition on that axis.
+function repeat(sdf, periodX, periodY, periodZ) {
+  return function (x, y, z) {
+    const px = periodX > 0 ? ((x % periodX) + periodX) % periodX - periodX / 2 : x;
+    const py = periodY > 0 ? ((y % periodY) + periodY) % periodY - periodY / 2 : y;
+    const pz = periodZ > 0 ? ((z % periodZ) + periodZ) % periodZ - periodZ / 2 : z;
+    return sdf(px, py, pz);
+  };
+}
+
+function twistY(sdf, k) {
+  return function (x, y, z) {
+    const c = Math.cos(k * y), s = Math.sin(k * y);
+    return sdf(x * c - z * s, y, x * s + z * c);
+  };
+}
+
+// Cheap-bend (Inigo Quilez): rotate the xy plane by `k * y` before
+// evaluating. Turns a straight column into a curve / hook.
+function bendY(sdf, k) {
+  return function (x, y, z) {
+    const c = Math.cos(k * y), s = Math.sin(k * y);
+    return sdf(c * x - s * y, s * x + c * y, z);
+  };
+}
+
+// Mirror around the given axis ('x' | 'y' | 'z') — instant bilateral
+// symmetry. The half-SDF you define on the +axis side gets reflected.
+function mirror(sdf, axis) {
+  if (axis === 'x') return (x, y, z) => sdf(Math.abs(x), y, z);
+  if (axis === 'y') return (x, y, z) => sdf(x, Math.abs(y), z);
+  return (x, y, z) => sdf(x, y, Math.abs(z));
+}
+
+// Poisson-disc / blue-noise scatter — Bridson's dart-throwing algorithm.
+// Returns an array of [x, y] points within `region` (xMin/xMax/yMin/yMax)
+// such that every pair is at least `minDist` apart. Each `rng()` draw
+// supplies a uniform [0, 1) random.
+function poissonScatter(rng, minDist, region, maxAttempts) {
+  maxAttempts = maxAttempts || 20;
+  const cellSize = minDist / Math.SQRT2;
+  const cols = Math.max(1, Math.ceil((region.xMax - region.xMin) / cellSize));
+  const rows = Math.max(1, Math.ceil((region.yMax - region.yMin) / cellSize));
+  const grid = new Array(cols * rows).fill(null);
+  const points = [];
+  const active = [];
+
+  function cellOf(p) {
+    return [
+      Math.floor((p[0] - region.xMin) / cellSize),
+      Math.floor((p[1] - region.yMin) / cellSize)
+    ];
+  }
+  function place(p) {
+    points.push(p);
+    active.push(p);
+    const [cx, cy] = cellOf(p);
+    grid[cy * cols + cx] = p;
+  }
+
+  place([
+    region.xMin + rng() * (region.xMax - region.xMin),
+    region.yMin + rng() * (region.yMax - region.yMin)
+  ]);
+
+  while (active.length) {
+    const idx = Math.floor(rng() * active.length);
+    const c = active[idx];
+    let placed = false;
+    for (let k = 0; k < maxAttempts; k++) {
+      const ang = rng() * 2 * Math.PI;
+      const rad = minDist * (1 + rng());
+      const p = [c[0] + Math.cos(ang) * rad, c[1] + Math.sin(ang) * rad];
+      if (p[0] < region.xMin || p[0] > region.xMax) continue;
+      if (p[1] < region.yMin || p[1] > region.yMax) continue;
+      const [pcx, pcy] = cellOf(p);
+      let ok = true;
+      for (let dy = -2; dy <= 2 && ok; dy++) {
+        for (let dx = -2; dx <= 2 && ok; dx++) {
+          const ny = pcy + dy, nx = pcx + dx;
+          if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+          const other = grid[ny * cols + nx];
+          if (!other) continue;
+          const ddx = other[0] - p[0], ddy = other[1] - p[1];
+          if (ddx * ddx + ddy * ddy < minDist * minDist) ok = false;
+        }
+      }
+      if (ok) { place(p); placed = true; break; }
+    }
+    if (!placed) active.splice(idx, 1);
+  }
+  return points;
+}
+
+// ============================================================
+// 2-D distance functions in the (r, y) plane — for revolveY profiles.
+// Same call signature as 3-D SDFs (x, y, z) so they compose with the
+// existing sdfUnion/sdfSubtract/smin operators; the `z` argument is
+// ignored. By convention r = the first coord (treat as "radius") and
+// y = the second.
+// ============================================================
+function circle2D(cr, cy, radius) {
+  return function (r, y) {
+    const dr = r - cr, dy = y - cy;
+    return Math.sqrt(dr * dr + dy * dy) - radius;
+  };
+}
+function box2D(cr, cy, hr, hy, round) {
+  const ro = round || 0;
+  const hrR = hr - ro, hyR = hy - ro;
+  return function (r, y) {
+    const dr = Math.abs(r - cr) - hrR;
+    const dy = Math.abs(y - cy) - hyR;
+    const oR = Math.max(dr, 0), oY = Math.max(dy, 0);
+    const outside = Math.sqrt(oR * oR + oY * oY);
+    const inside = Math.min(Math.max(dr, dy), 0);
+    return outside + inside - ro;
+  };
+}
+
+// Revolve a 2-D distance function around the Y axis. The 2-D SDF lives
+// in the (r, y) plane (r = signed radius). The 3-D SDF samples it at
+// r = sqrt(x² + z²). Useful for vases, urns, saucers, banisters, any
+// rotationally-symmetric form.
+function revolveY(dist2D) {
+  return function (x, y, z) {
+    return dist2D(Math.sqrt(x * x + z * z), y, 0);
+  };
+}
+
+// Stack — build N instances of an SDF parametrised by index and combine
+// them. `builder(i)` returns the per-instance SDF. Sharp union when
+// smoothK is 0, smooth-min otherwise. Useful for recursive towers,
+// spiral staircases, repeated motifs that vary slightly per instance.
+function stack(builder, count, smoothK) {
+  const sdfs = [];
+  for (let i = 0; i < count; i++) sdfs.push(builder(i));
+  return sdfUnion(sdfs, smoothK || 0);
+}
+
+// X-axis-aligned capsule — useful as a "tunnel" carver to punch a
+// horizontal arch through a rock. (Hvítserkur-style.)
+function makeCapsuleX(cx, cy, cz, halfLen, r) {
+  return function (x, y, z) {
+    const tx = Math.max(-halfLen, Math.min(halfLen, x - cx));
+    const dx = (x - cx) - tx;
+    const dy = y - cy;
+    const dz = z - cz;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  };
+}
+
+// Z-axis-aligned capsule — front-to-back tunnel.
+function makeCapsuleZ(cx, cy, cz, halfLen, r) {
+  return function (x, y, z) {
+    const tz = Math.max(-halfLen, Math.min(halfLen, z - cz));
+    const dx = x - cx;
+    const dy = y - cy;
+    const dz = (z - cz) - tz;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  };
+}
+
+// Beam helper: returns viewBox-space polylines for a fan of light rays
+// emanating from a world-space lamp position. Used by the lighthouse
+// scenes via the scene `extraStrokes` callback. Rays are clipped to the
+// printable area (inside MARGIN_VB) so they don't bleed into the page
+// margin.
+function lighthouseBeam(ctx, lampWorldPos, opts) {
+  opts = opts || {};
+  const lampVB = ctx.worldToVB(lampWorldPos);
+  if (!lampVB) return [];
+  const numRays    = opts.numRays    != null ? opts.numRays    : 7;
+  const centerDeg  = opts.centerDeg  != null ? opts.centerDeg  : 30;  // 0=up, +=right
+  const spreadDeg  = opts.spreadDeg  != null ? opts.spreadDeg  : 22;
+  const lengthVB   = opts.lengthVB   != null ? opts.lengthVB   : 900;
+  // Inside-margin bounds. Liang-Barsky clip clamps each ray's end to
+  // the first place it exits this rectangle, so rays don't run into
+  // the page margin.
+  const m = MARGIN_VB;
+  const xMin = m, yMin = m, xMax = VB_W - m, yMax = VB_H - m;
+  const paths = [];
+  for (let i = 0; i < numRays; i++) {
+    const t = numRays === 1 ? 0 : (i / (numRays - 1) - 0.5) * 2;  // -1..1
+    const ang = (centerDeg + t * spreadDeg) * Math.PI / 180;
+    // 0° = straight up in viewBox (negative y direction).
+    const dx =  Math.sin(ang) * lengthVB;
+    const dy = -Math.cos(ang) * lengthVB;
+    let tMax = 1;
+    if (dx > 0) tMax = Math.min(tMax, (xMax - lampVB[0]) / dx);
+    if (dx < 0) tMax = Math.min(tMax, (xMin - lampVB[0]) / dx);
+    if (dy > 0) tMax = Math.min(tMax, (yMax - lampVB[1]) / dy);
+    if (dy < 0) tMax = Math.min(tMax, (yMin - lampVB[1]) / dy);
+    if (tMax <= 0) continue;
+    paths.push([
+      [lampVB[0],            lampVB[1]],
+      [lampVB[0] + dx * tMax, lampVB[1] + dy * tMax]
+    ]);
+  }
+  return paths;
+}
+
+// Rain dashes: short straight strokes scattered across the sky region,
+// all at the same angle. Deterministic via seed so the same image renders
+// the same rain every time.
+function rainDashes(ctx, opts) {
+  opts = opts || {};
+  const numDashes = opts.numDashes != null ? opts.numDashes : 250;
+  const dashLen = opts.dashLen != null ? opts.dashLen : 20;
+  const angleDeg = opts.angleDeg != null ? opts.angleDeg : 78;
+  const a = angleDeg * Math.PI / 180;
+  const dx = Math.cos(a) * dashLen;
+  const dy = Math.sin(a) * dashLen;
+  let s = (opts.seed != null) ? hashStringToInt(String(opts.seed)) : 12345;
+  function r() { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }
+  const yMin = 50;
+  const yMax = ctx.syHorizon - 20;
+  const paths = [];
+  for (let i = 0; i < numDashes; i++) {
+    const x = r() * 1200;
+    const y = yMin + r() * (yMax - yMin);
+    paths.push([[x, y], [x + dx, y + dy]]);
+  }
+  return paths;
+}
+
+function hashStringToInt(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+// ============================================================
+// Scene registry. Adding a new sister project = adding an entry here.
+//
+// Two entry shapes are accepted:
+//   1. A function of (rng, state) — back-compat shape; scenes with no
+//      tunable parameters just use this. State carries global controls
+//      (lw, density, light, camera tilt, etc.) only.
+//   2. An object { ui: [...], build: function (rng, state, params) }
+//      where `ui` is a list of param descriptors rendered into the
+//      "Scene parameters" panel, and `build` receives the live values.
+//      Param descriptors: { id, label, type: 'int' | 'number', min, max,
+//      step?, default }.
+// ============================================================
+
+// Forest tree builders. Body (small, many) and hero (big, one) use the
+// SAME 4-style switch; pulled out so each style's branching logic lives
+// in one place per call site. They were previously two ~50-line inline
+// switches, identical in structure but with slightly different
+// proportions.
+function buildForestTreeBody(rng, style, cx, cz, trunkR, canopyR, baseHeight, heightScale) {
+  if (style === 'conifer') {
+    const trunkTop = -0.70 + 0.25 * baseHeight;
+    const conePeak = trunkTop + canopyR * 2.6 * heightScale;
+    const trunk  = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR * 0.6);
+    const canopy = makeConeY(cx, conePeak, trunkTop - 0.04, cz, canopyR * 0.85);
+    return sdfUnion([trunk, canopy], 0.012);
+  }
+  if (style === 'winter') {
+    const trunkTop = -0.70 + 0.55 * heightScale;
+    const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR);
+    const parts = [trunk];
+    const nB = 4;
+    for (let b = 0; b < nB; b++) {
+      const yaw  = (b / nB) * Math.PI * 2 + rng() * 0.8;
+      const lift = (0.5 + rng() * 0.5) * Math.PI / 4;
+      const len  = canopyR * (1.1 + rng() * 0.6);
+      const seg  = makeCapsuleX(0, 0, 0, len, trunkR * 0.45);
+      let b1 = rotateZ(seg, lift);
+      b1 = rotateY(b1, yaw);
+      b1 = translate(b1, cx, trunkTop + len * 0.5, cz);
+      parts.push(b1);
+    }
+    return sdfUnion(parts, 0.012);
+  }
+  if (style === 'oldgrowth') {
+    const trunkTop = -0.70 + 0.40 * baseHeight * heightScale;
+    const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR * 1.8);
+    const c1 = makeSphere(cx, trunkTop + canopyR * 0.60 * heightScale, cz, canopyR * 1.4 * heightScale);
+    const c2 = makeSphere(cx + canopyR * 0.5, trunkTop + canopyR * 0.95 * heightScale,
+                          cz + (rng() - 0.5) * canopyR * 0.5, canopyR * 1.0 * heightScale);
+    return sdfUnion([trunk, c1, c2], 0.04);
+  }
+  // 'mixed' — per-tree random pick between conifer-ish and round.
+  if (rng() < 0.55) {
+    const trunkTop = -0.70 + 0.25 * baseHeight;
+    const conePeak = trunkTop + canopyR * 2.4 * heightScale;
+    const trunk  = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR * 0.6);
+    const canopy = makeConeY(cx, conePeak, trunkTop - 0.04, cz, canopyR * 0.8);
+    return sdfUnion([trunk, canopy], 0.012);
+  }
+  const trunkTop = -0.70 + 0.35 * baseHeight;
+  const canopyY  = trunkTop + canopyR * 0.6 * heightScale;
+  const trunk = makeCylinderY(cx, -0.70, trunkTop, cz, trunkR);
+  const canopy = makeSphere(cx, canopyY, cz, canopyR * heightScale);
+  return sdfUnion([trunk, canopy], 0.025);
+}
+
+function buildForestTreeHero(rng, style, hx, hz, trunkR, canopyR, H) {
+  if (style === 'conifer') {
+    const trunkTop = -0.70 + 0.20 * H;
+    const conePeak = trunkTop + canopyR * 3.4;
+    const trunk = makeCylinderY(hx, -0.72, trunkTop, hz, trunkR * 0.7);
+    const cone  = makeConeY(hx, conePeak, trunkTop - 0.05, hz, canopyR * 0.95);
+    return sdfUnion([trunk, cone], 0.015);
+  }
+  if (style === 'winter') {
+    const trunkTop = -0.70 + 0.55 * H;
+    const trunk = makeCylinderY(hx, -0.72, trunkTop, hz, trunkR);
+    const parts = [trunk];
+    const nB = 6;
+    for (let b = 0; b < nB; b++) {
+      const yaw  = (b / nB) * Math.PI * 2 + rng() * 0.6;
+      const lift = (0.5 + rng() * 0.5) * Math.PI / 4;
+      const len  = canopyR * (1.4 + rng() * 0.6);
+      const seg  = makeCapsuleX(0, 0, 0, len, trunkR * 0.4);
+      let b1 = rotateZ(seg, lift);
+      b1 = rotateY(b1, yaw);
+      b1 = translate(b1, hx, trunkTop + len * 0.5, hz);
+      parts.push(b1);
+    }
+    return sdfUnion(parts, 0.015);
+  }
+  if (style === 'oldgrowth') {
+    const trunkTop = -0.70 + 0.35 * H;
+    const trunk = makeCylinderY(hx, -0.72, trunkTop, hz, trunkR * 1.6);
+    const c1 = makeSphere(hx,                  trunkTop + canopyR * 0.5, hz,         canopyR * 1.5);
+    const c2 = makeSphere(hx + canopyR * 0.55, trunkTop + canopyR * 0.9, hz - 0.04,  canopyR * 1.1);
+    const c3 = makeSphere(hx - canopyR * 0.35, trunkTop + canopyR * 1.1, hz + 0.04,  canopyR * 0.9);
+    return sdfUnion([trunk, c1, c2, c3], 0.05);
+  }
+  // 'mixed' — round-canopy hero with thick trunk.
+  const trunkTop = -0.70 + 0.30 * H;
+  const trunk = makeCylinderY(hx, -0.72, trunkTop, hz, trunkR);
+  const c1 = makeSphere(hx,                trunkTop + canopyR * 0.6, hz, canopyR * 1.3);
+  const c2 = makeSphere(hx + canopyR * 0.5, trunkTop + canopyR * 0.9, hz, canopyR * 0.9);
+  return sdfUnion([trunk, c1, c2], 0.04);
+}
+
+const SCENES = {
+  single: {
+    ui: [
+      { id: 'nSpheres',    label: 'Blob spheres', type: 'int',    min: 8,    max: 12,  step: 1,    default: 10  },
+      { id: 'spread',      label: 'Spread',       type: 'number', min: 1.0,  max: 2.5, step: 0.1,  default: 1.5 },
+      { id: 'verticality', label: 'Verticality',  type: 'number', min: 1.5,  max: 1.9, step: 0.1,  default: 1.7 },
+      { id: 'smoothK',     label: 'Smoothing k',  type: 'number', min: 0.3,  max: 0.5, step: 0.05, default: 0.4 }
+    ],
+    build: function (rng, state, params) {
+      return makeBlobSDFAt(rng, {
+        center: [0, 0, 0],
+        nSpheres: params.nSpheres,
+        smoothK: params.smoothK,
+        spread: params.spread,
+        verticality: params.verticality,
+        pointiness: 0
+      });
+    }
+  },
+};
+
+
+// ============================================================
+// Camera + raymarch (orthographic in y, mild perspective in z so the
+// horizon plane is visible)
+// ============================================================
+// Inverse of castRay — projects a 3-D world point onto the screen (sx, sy).
+// Returns null if the point is behind the camera.
+function worldToScreen(P) {
+  const dx = P[0] - CAM[0], dy = P[1] - CAM[1], dz = P[2] - CAM[2];
+  const fDotD = camF[0] * dx + camF[1] * dy + camF[2] * dz;
+  if (fDotD <= 1e-6) return null;
+  const t = FOCAL / fDotD;
+  return [
+    t * (camR[0] * dx + camR[1] * dy + camR[2] * dz),
+    t * (camU[0] * dx + camU[1] * dy + camU[2] * dz)
+  ];
+}
+
+function castRay(sx, sy) {
+  // direction = F·focal + R·sx + U·sy, normalized
+  const dx = camF[0] * FOCAL + camR[0] * sx + camU[0] * sy;
+  const dy = camF[1] * FOCAL + camR[1] * sx + camU[1] * sy;
+  const dz = camF[2] * FOCAL + camR[2] * sx + camU[2] * sy;
+  const len = Math.hypot(dx, dy, dz);
+  return [dx / len, dy / len, dz / len];
+}
+function rayMarch(sdf, ox, oy, oz, dx, dy, dz, tMax) {
+  let t = 0;
+  for (let i = 0; i < 96; i++) {
+    const d = sdf(ox + dx * t, oy + dy * t, oz + dz * t);
+    if (d < 0.0008) return t;
+    t += Math.max(d, 0.004);
+    if (t > tMax) return -1;
+  }
+  return -1;
+}
+
+// Cast a shadow ray from a near-surface point toward the light direction L.
+// Returns 1 if another SDF surface blocks the ray before maxT, else 0.
+// Soft shadow with penumbra. Returns 0..1 where 1 = fully shadowed and
+// 0 = fully lit. Inigo Quilez's "soft shadow" technique: at each marching
+// step track min(k*d/t) along the ray; small values of d (close to a
+// surface) at large t (far from origin) produce a soft falloff.
+//
+// `k` controls penumbra hardness — higher k = sharper edge. maxT extends
+// the ray's reach so we get the LONG cast shadows you see in URH-style
+// landscapes when the sun is low.
+function softShadow(sdf, x, y, z, L, maxT, k) {
+  let res = 1.0;
+  let t = 0.008;
+  for (let i = 0; i < 48; i++) {
+    const d = sdf(x + L[0] * t, y + L[1] * t, z + L[2] * t);
+    if (d < 0.001) return 1;          // hard occlusion
+    const r = k * d / t;
+    if (r < res) res = r;
+    t += Math.max(d, 0.006);
+    if (t > maxT) break;
+  }
+  if (res < 0) res = 0;
+  if (res > 1) res = 1;
+  return 1 - res;                     // invert: 1 = shadowed
+}
+
+// Ambient occlusion: short rays along the surface normal sampled at
+// progressive distances. Inward corners and creases see less open space
+// and read darker. Returns 0..1 where 1 = fully exposed.
+function ambientOcclusion(sdf, x, y, z, nx, ny, nz) {
+  let occ = 0.0;
+  let weight = 1.0;
+  for (let i = 1; i <= 5; i++) {
+    const d = 0.025 * i;
+    const sample = sdf(x + nx * d, y + ny * d, z + nz * d);
+    occ += weight * (d - sample);
+    weight *= 0.65;
+  }
+  let v = 1 - 3.0 * occ;
+  if (v < 0) v = 0;
+  if (v > 1) v = 1;
+  return v;
+}
+function normalAt(sdf, x, y, z) {
+  const e = 0.0009;
+  const nx = sdf(x + e, y, z) - sdf(x - e, y, z);
+  const ny = sdf(x, y + e, z) - sdf(x, y - e, z);
+  const nz = sdf(x, y, z + e) - sdf(x, y, z - e);
+  const l = Math.hypot(nx, ny, nz) || 1;
+  return [nx / l, ny / l, nz / l];
+}
+
+// ============================================================
+// Scene buffer (depth, normal, lighting, surface, precomputed primary
+// hatch angle index per pixel)
+// surface: 0 = sky, 1 = blob, 2 = ground
+// ============================================================
+function snapAngle(a) {
+  let amod = ((a % Math.PI) + Math.PI) % Math.PI;
+  let bestI = 0, bestD = Infinity;
+  for (let i = 0; i < HATCH_ANGLES.length; i++) {
+    let d = Math.abs(amod - HATCH_ANGLES[i]);
+    if (d > Math.PI / 2) d = Math.PI - d;
+    if (d < bestD) { bestD = d; bestI = i; }
+  }
+  return bestI;
+}
+
+function renderSceneBuffer(state, sdf, materialFn) {
+  const W = state.bufRes;
+  const H = Math.round(W * (SY_MAX - SY_MIN) / (SX_MAX - SX_MIN));
+  const N = W * H;
+  const buf = {
+    W, H,
+    surface: new Uint8Array(N),  // 0=sky 1=rock 2=ground
+    nx: new Float32Array(N), ny: new Float32Array(N), nz: new Float32Array(N),
+    light: new Float32Array(N),
+    depth: new Float32Array(N),
+    primary: new Uint8Array(N),
+    shadow: new Float32Array(N), // 0..1, 1 = fully shadowed (soft shadows)
+    ao: new Float32Array(N),     // 0..1, 1 = fully exposed (1.0 by default)
+    material: new Uint8Array(N)  // 0=default; scenes may set 1..255 per pixel
+  };
+
+  let lL = Math.hypot(state.lx, state.ly, state.lz) || 1;
+  const L = [state.lx / lL, state.ly / lL, state.lz / lL];
+
+  for (let py = 0; py < H; py++) {
+    const sy = SY_MAX - (py / (H - 1)) * (SY_MAX - SY_MIN);
+    for (let px = 0; px < W; px++) {
+      const sx = SX_MIN + (px / (W - 1)) * (SX_MAX - SX_MIN);
+      const idx = py * W + px;
+      const [dx, dy, dz] = castRay(sx, sy);
+
+      let tG = -1;
+      if (dy < -1e-5) {
+        const t = (GROUND_Y - CAM[1]) / dy;
+        if (t > 0) tG = t;
+      }
+      const tB = rayMarch(sdf, CAM[0], CAM[1], CAM[2], dx, dy, dz, 25);
+
+      let hit = 0, n = null, t = -1;
+      if (tB > 0 && (tG < 0 || tB < tG)) {
+        hit = 1; t = tB;
+        n = normalAt(sdf, CAM[0] + dx * tB, CAM[1] + dy * tB, CAM[2] + dz * tB);
+      } else if (tG > 0) {
+        hit = 2; t = tG; n = [0, 1, 0];
+      }
+
+      if (hit === 0) { buf.surface[idx] = 0; continue; }
+      buf.surface[idx] = hit;
+      buf.nx[idx] = n[0]; buf.ny[idx] = n[1]; buf.nz[idx] = n[2];
+      buf.depth[idx] = t;
+      const ld = Math.max(0, n[0] * L[0] + n[1] * L[1] + n[2] * L[2]);
+      buf.light[idx] = 0.15 + 0.85 * ld;
+
+      // Scene-supplied per-pixel material id. Only computed for blob
+      // hits (hit === 1) — ground and sky always sit at material 0.
+      if (hit === 1 && materialFn) {
+        const wx = CAM[0] + dx * t;
+        const wy = CAM[1] + dy * t;
+        const wz = CAM[2] + dz * t;
+        const m = materialFn(wx, wy, wz);
+        buf.material[idx] = (m >= 0 && m <= 255) ? (m | 0) : 0;
+      }
+
+      // Soft shadow ray + AO. For blobs, offset along the surface normal.
+      // For ground, the surface normal is (0, 1, 0) so we offset slightly
+      // upward. AO defaults to 1 (fully exposed); we compute it for blob
+      // hits where creases / pockets matter.
+      buf.ao[idx] = 1;
+      if (ld > 0) {
+        if (hit === 1) {
+          const hx = CAM[0] + dx * t + n[0] * 0.004;
+          const hy = CAM[1] + dy * t + n[1] * 0.004;
+          const hz = CAM[2] + dz * t + n[2] * 0.004;
+          // maxT 25 + penumbra factor 24 → long soft cast shadows.
+          buf.shadow[idx] = softShadow(sdf, hx, hy, hz, L, 25, 24);
+          buf.ao[idx] = ambientOcclusion(sdf, hx, hy, hz, n[0], n[1], n[2]);
+        } else if (hit === 2) {
+          const gx = CAM[0] + dx * t;
+          const gy = GROUND_Y + 0.005;
+          const gz = CAM[2] + dz * t;
+          buf.shadow[idx] = softShadow(sdf, gx, gy, gz, L, 25, 24);
+        }
+      }
+
+      // Per-pixel "primary" hatch angle = perpendicular to projected normal.
+      // For very face-on regions (small projected normal), the angle is
+      // unstable, so default to the diagonal there.
+      const projMag = Math.hypot(n[0], n[1]);
+      let pri;
+      if (hit === 2) {
+        pri = 0; // ground = horizontal
+      } else if (projMag < 0.15) {
+        pri = 1;
+      } else {
+        pri = snapAngle(Math.atan2(n[1], n[0]) + Math.PI / 2);
+      }
+      buf.primary[idx] = pri;
+    }
+  }
+  return buf;
+}
+
+function bufIdx(buf, sx, sy) {
+  const px = Math.round((sx - SX_MIN) / (SX_MAX - SX_MIN) * (buf.W - 1));
+  const py = Math.round((SY_MAX - sy) / (SY_MAX - SY_MIN) * (buf.H - 1));
+  if (px < 0 || px >= buf.W || py < 0 || py >= buf.H) return -1;
+  return py * buf.W + px;
+}
+
+// ============================================================
+// Hatching decision: for each (sx, sy) and a given hatch angle index,
+// returns whether the scan line at that angle should be "on" here.
+// ============================================================
+function shouldDrawAt(buf, sx, sy, angleIdx) {
+  const idx = bufIdx(buf, sx, sy);
+  if (idx < 0) return false;
+  // Sky and ground are handled by their own generators — the screen-space
+  // scan-line passes here are blob-only.
+  if (buf.surface[idx] !== 1) return false;
+
+  const pri = buf.primary[idx];
+  if (angleIdx === pri) return true;
+
+  // Blob: tiered crosshatch by offset from primary. Cast shadow pushes
+  // the effective darkness up, so shadowed regions reach further
+  // crosshatch tiers than their Lambert lighting alone would. The
+  // scene-supplied material id can shift darkness further (denser or
+  // sparser hatching per region — see MATERIAL_PROPS).
+  const offset = (angleIdx - pri + 4) % 4;
+  const darkness = computeDarkness(buf, idx);
+  const T = [0, 0.30, 0.55, 0.78];
+  return darkness > T[offset];
+}
+
+// ============================================================
+// Hatch generation: scan parallel lines across the image at each angle.
+// ============================================================
+function generateHatches(state, buf) {
+  const paths = [];
+  const spacingMM = state.lw * state.density;
+  const worldStep = Math.max(0.002, spacingMM * WORLD_PER_MM);
+  const sampleStep = Math.max(0.0015, worldStep * 0.35);
+  const RANGE = 1.8;
+
+  for (let a = 0; a < HATCH_ANGLES.length; a++) {
+    const ang = HATCH_ANGLES[a];
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+
+    // Stagger every other angle by half spacing so different angle grids
+    // don't visually align into moiré.
+    const phase = (a % 2) * worldStep * 0.5;
+    for (let s = -RANGE + phase; s <= RANGE; s += worldStep) {
+      const sx0 = -sa * s;
+      const sy0 = ca * s;
+
+      let inDraw = false;
+      let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+
+      for (let t = -RANGE; t <= RANGE; t += sampleStep) {
+        const sx = sx0 + ca * t;
+        const sy = sy0 + sa * t;
+        const inBounds = (sx >= SX_MIN && sx <= SX_MAX &&
+                          sy >= SY_MIN && sy <= SY_MAX);
+        const draw = inBounds && shouldDrawAt(buf, sx, sy, a);
+
+        if (draw) {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
+        } else if (inDraw) {
+          const segLen = Math.hypot(lastX - dx0, lastY - dy0);
+          if (segLen > worldStep * 0.4) {
+            paths.push([[dx0, dy0], [lastX, lastY]]);
+          }
+          inDraw = false;
+        }
+      }
+      if (inDraw) {
+        const segLen = Math.hypot(lastX - dx0, lastY - dy0);
+        if (segLen > worldStep * 0.4) {
+          paths.push([[dx0, dy0], [lastX, lastY]]);
+        }
+      }
+    }
+  }
+  return paths;
+}
+
+// ============================================================
+// Cell hatcher: port of VectorFriend's modules/hatching.js.
+//
+// Divide the image into a grid of square cells. For each cell that lands
+// on the blob surface, compute the average brightness and emit up to
+// maxHatches horizontal hatches whose count is proportional to darkness.
+// The hatch lines are evenly distributed within the cell's vertical
+// slots so the placement reads as a halftone screen. A small Perlin
+// wobble can be applied to each line (line wobble parameter).
+//
+// Unlike the scan-line hatcher (continuous strokes broken by surface
+// transitions), each cell contributes its own short strokes — a tight
+// halftone look distinct from any of the curve modes.
+// ============================================================
+function generateCellHatches(state, buf) {
+  const paths = [];
+  const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
+  // Cell grid: maxHatches and cellSize are now decoupled so we can keep
+  // 4 tonal levels per cell while shrinking cells for halftone density.
+  // - maxHatches = 4 → cells resolve 4 tonal steps (1, 2, 3, 4 lines).
+  // - cellSize = baseSpacing × 2.5 → cells are ~1.6× smaller per side
+  //   (about 2.6× more cells per page area) than the original
+  //   baseSpacing × 4 sizing.
+  // Line spacing inside a cell = cellSize / maxHatches = 0.625 × the
+  // user's lw spacing — a touch denser than the lw spec, which is the
+  // tradeoff for finer halftone resolution.
+  const maxHatches = 4;
+  const cellSize = baseSpacing * 2.5;
+  const cellsX = Math.max(2, Math.round((SX_MAX - SX_MIN) / cellSize));
+  const actualCellSize = (SX_MAX - SX_MIN) / cellsX;
+  const cellsY = Math.max(2, Math.round((SY_MAX - SY_MIN) / actualCellSize));
+  const wobbleNoise = makeNoise2D(state.seed + ':cellWobble');
+  const wobbleAmp = baseSpacing * 0.30;
+  for (let cy = 0; cy < cellsY; cy++) {
+    const cellY0 = SY_MIN + cy * actualCellSize;
+    const cellY1 = cellY0 + actualCellSize;
+    for (let cx = 0; cx < cellsX; cx++) {
+      const cellX0 = SX_MIN + cx * actualCellSize;
+      const cellX1 = cellX0 + actualCellSize;
+      let total = 0, count = 0;
+      const subStep = actualCellSize / 6;
+      for (let sy = cellY0; sy < cellY1; sy += subStep) {
+        for (let sx = cellX0; sx < cellX1; sx += subStep) {
+          const idx = bufIdx(buf, sx, sy);
+          if (idx >= 0 && buf.surface[idx] === 1) {
+            total += 1 - computeDarkness(buf, idx);
+            count++;
+          }
+        }
+      }
+      if (count === 0) continue;
+      const avg = total / count;
+      // Even the brightest cell on the blob gets ONE line so highlights
+      // read as the first hatch level rather than pure white paper.
+      // buf.light has 0.15 ambient floor (light = 0.15 + 0.85 × lambert),
+      // so the darkest single-blob cells only reach avg ≈ 0.15 — not low
+      // enough to round up to numHatches = maxHatches. Rescale (1 − avg)
+      // by 1/0.85 ≈ 1.18 so unlit cells fully reach the 4-line tier, and
+      // clamp at maxHatches.
+      const darkness = Math.min(1, (1 - avg) / 0.85);
+      const numHatches = Math.max(1, Math.min(maxHatches, Math.floor(darkness * maxHatches + 0.5)));
+      for (let i = 0; i < numHatches; i++) {
+        // Distribute `numHatches` lines across `maxHatches` slot positions.
+        // Old formula was Math.round((i+1) * (M/(N+1))) - 1 which collided
+        // (e.g. N=M=4 → slots 0,1,1,2 — only 3 distinct lines for 4 levels).
+        // floor((i + 0.5) * M / N) is collision-free for N ≤ M.
+        const slotIdx = Math.floor((i + 0.5) * maxHatches / numHatches);
+        if (slotIdx < 0 || slotIdx >= maxHatches) continue;
+        const slotY = cellY0 + (slotIdx + 0.5) / maxHatches * actualCellSize;
+        const segs = 8;
+        let pts = [];
+        for (let s = 0; s <= segs; s++) {
+          const t = s / segs;
+          const x = cellX0 + t * actualCellSize;
+          const w = (wobbleNoise(x * 8, slotY * 8) - 0.5) * wobbleAmp * 2;
+          const ySamp = slotY + w;
+          const idx = bufIdx(buf, x, ySamp);
+          if (idx >= 0 && buf.surface[idx] === 1) {
+            pts.push([x, ySamp]);
+          } else if (pts.length >= 2) {
+            paths.push(pts);
+            pts = [];
+          } else {
+            pts = [];
+          }
+        }
+        if (pts.length >= 2) paths.push(pts);
+      }
+    }
+  }
+  return paths;
+}
+
+// ============================================================
+// Monet hatcher: short wavy brushstrokes scattered on the blob surface.
+// Each stroke is a curved polyline of ~8 segments centred on its seed
+// point, oriented along the projected-normal perpendicular with a small
+// random direction jitter. A sinusoidal perpendicular wobble overlaid
+// on the stroke gives the brush-mark feel. Stroke density is driven by
+// per-pixel darkness so unlit regions accumulate strokes.
+// ============================================================
+// TSP infill: scatter fill points across the blob surface with density
+// modulated by brightness (darker areas get more points), then visit
+// every point with a single nearest-neighbour path. The result is a
+// single continuous polyline — minimal pen lifts, organic flowing
+// fill, denser passes through shadowed regions.
+//
+// Uses a spatial-hash bucket grid for O(N) (amortised) nearest-neighbour
+// lookups so the pen routing stays fast even for thousands of points.
+function generateTspHatches(state, buf) {
+  const paths = [];
+  const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
+  // Seed grid — slightly tighter than line spacing so dropouts give
+  // a usable point density.
+  const seedStep = baseSpacing * 1.1;
+  // Collect points with brightness-modulated keep probability.
+  const points = [];
+  for (let sy = SY_MIN; sy <= SY_MAX; sy += seedStep) {
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += seedStep) {
+      const idx = bufIdx(buf, sx, sy);
+      if (idx < 0 || buf.surface[idx] !== 1) continue;
+      const darkness = computeDarkness(buf, idx);
+      // 12 % minimum so highlights get sparse coverage (not pure white).
+      const keepProb = Math.max(0.12, Math.pow(darkness, 1.4));
+      if (hash01(sx, sy) > keepProb) continue;
+      points.push([sx, sy]);
+    }
+  }
+  if (points.length < 2) return paths;
+
+  // Spatial-hash bucket so nearest-neighbour scans are O(local cell) not
+  // O(N). Bucket size ≈ 4 × seedStep keeps each cell to a few points.
+  const bucketSize = seedStep * 4;
+  const buckets = new Map();
+  function bkey(bx, by) { return bx + ',' + by; }
+  for (let i = 0; i < points.length; i++) {
+    const bx = Math.floor(points[i][0] / bucketSize);
+    const by = Math.floor(points[i][1] / bucketSize);
+    const k = bkey(bx, by);
+    let list = buckets.get(k);
+    if (!list) { list = []; buckets.set(k, list); }
+    list.push(i);
+  }
+  const visited = new Uint8Array(points.length);
+  function findNearest(cx, cy) {
+    const cbx = Math.floor(cx / bucketSize);
+    const cby = Math.floor(cy / bucketSize);
+    let best = -1;
+    let bestDist = Infinity;
+    for (let radius = 0; radius < 16; radius++) {
+      for (let dby = -radius; dby <= radius; dby++) {
+        for (let dbx = -radius; dbx <= radius; dbx++) {
+          if (Math.max(Math.abs(dbx), Math.abs(dby)) !== radius) continue;
+          const list = buckets.get(bkey(cbx + dbx, cby + dby));
+          if (!list) continue;
+          for (let li = 0; li < list.length; li++) {
+            const i = list[li];
+            if (visited[i]) continue;
+            const dx = points[i][0] - cx, dy = points[i][1] - cy;
+            const d = dx * dx + dy * dy;
+            if (d < bestDist) { bestDist = d; best = i; }
+          }
+        }
+      }
+      // If we found a candidate and the next ring can't beat it, stop.
+      if (best >= 0) {
+        const ringReach = radius * bucketSize;
+        if (bestDist <= ringReach * ringReach) return best;
+      }
+    }
+    return best;
+  }
+  // Build the path. If the next-nearest jump is too long, break the
+  // polyline and start a fresh one — keeps long penlines from slashing
+  // across the silhouette.
+  const maxJump = baseSpacing * 14;
+  const maxJumpSqr = maxJump * maxJump;
+  let path = [points[0]];
+  visited[0] = 1;
+  let current = 0;
+  let remaining = points.length - 1;
+  while (remaining > 0) {
+    const next = findNearest(points[current][0], points[current][1]);
+    if (next < 0) break;
+    visited[next] = 1;
+    remaining--;
+    const dx = points[next][0] - points[current][0];
+    const dy = points[next][1] - points[current][1];
+    if (dx * dx + dy * dy > maxJumpSqr) {
+      // Far jump — emit current path, start a new one at this point.
+      if (path.length >= 2) paths.push(path);
+      path = [points[next]];
+    } else {
+      path.push(points[next]);
+    }
+    current = next;
+  }
+  if (path.length >= 2) paths.push(path);
+  return paths;
+}
+
+function generateMonetHatches(state, buf) {
+  const paths = [];
+  const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
+  const strokeLen = baseSpacing * 7;
+  // Seeds spaced 1.4× line spacing (was 0.9×) so the foreground stroke
+  // population is much sparser by default. Density still scales with
+  // darkness via the probabilistic dropout test below.
+  const seedStep = baseSpacing * 1.4;
+  const wobbleAmp = baseSpacing * 0.45;
+  const dirNoise = makeNoise2D(state.seed + ':monetDir');
+  for (let sy = SY_MIN; sy <= SY_MAX; sy += seedStep) {
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += seedStep) {
+      const idx = bufIdx(buf, sx, sy);
+      if (idx < 0 || buf.surface[idx] !== 1) continue;
+      const darkness = computeDarkness(buf, idx);
+      // Probability of placing a stroke = darkness^1.8 — a steeper
+      // exponent than the old linear curve so mid-tones thin out fast
+      // while only the genuinely dark regions stay densely stroked.
+      // Minimum 8 % stroke probability everywhere on the surface — even
+      // the brightest highlights get a sparse first-tier of brushstrokes
+      // (no pure-white-paper gaps).
+      const strokeProb = Math.max(0.08, Math.pow(darkness, 1.8));
+      if (hash01(sx, sy) > strokeProb) continue;
+      const nx = buf.nx[idx], ny = buf.ny[idx];
+      let dirX = -ny, dirY = nx;
+      const m = Math.hypot(dirX, dirY);
+      if (m < 1e-4) { dirX = 1; dirY = 0; } else { dirX /= m; dirY /= m; }
+      const jitter = (dirNoise(sx * 5, sy * 5) - 0.5) * 0.6;
+      const cosJ = Math.cos(jitter), sinJ = Math.sin(jitter);
+      const dx = dirX * cosJ - dirY * sinJ;
+      const dy = dirX * sinJ + dirY * cosJ;
+      const segs = 8;
+      const pts = [];
+      let allOn = true;
+      for (let i = -segs / 2; i <= segs / 2; i++) {
+        const t = i / segs;
+        const px = sx + dx * t * strokeLen;
+        const py = sy + dy * t * strokeLen;
+        const wob = Math.sin(t * Math.PI * 3) * wobbleAmp;
+        const wpx = px - dy * wob;
+        const wpy = py + dx * wob;
+        const sIdx = bufIdx(buf, wpx, wpy);
+        if (sIdx < 0 || buf.surface[sIdx] !== 1) { allOn = false; break; }
+        pts.push([wpx, wpy]);
+      }
+      if (allOn && pts.length >= 2) paths.push(pts);
+    }
+  }
+  return paths;
+}
+
+// ============================================================
+// Crosshatch hatcher: just horizontals + verticals. Two-tier threshold:
+// horizontals always draw on the surface; verticals only draw in regions
+// darker than 'crossThreshold'. Lightweight alternative to the 4-angle
+// scan-line.
+// ============================================================
+function generateCrosshatchHatches(state, buf) {
+  const paths = [];
+  const worldStep = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
+  const sampleStep = Math.max(0.0015, worldStep * 0.35);
+  const RANGE = 1.8;
+  // Four-level threshold-based crosshatch. Each layer adds another set
+  // of strokes in progressively darker regions, so the user sees
+  // continuous tonal variation instead of a single bright/dark split.
+  //
+  //   Layer 0: primary H lines    (always — bright surface = level 1)
+  //   Layer 1: secondary H lines  (darkness > 0.30 — level 2)
+  //   Layer 2: primary V lines    (darkness > 0.50 — level 3)
+  //   Layer 3: secondary V lines  (darkness > 0.70 — level 4)
+  //
+  // Secondary H/V are offset by half a worldStep so they interleave
+  // with the primary lines, doubling local line density.
+  const layers = [
+    { ang: 0,           offset: 0,                threshold: -0.01 },
+    { ang: 0,           offset: worldStep * 0.5,  threshold: 0.30  },
+    { ang: Math.PI / 2, offset: 0,                threshold: 0.50  },
+    { ang: Math.PI / 2, offset: worldStep * 0.5,  threshold: 0.70  }
+  ];
+  for (const L of layers) {
+    const ca = Math.cos(L.ang), sa = Math.sin(L.ang);
+    for (let s = -RANGE + L.offset; s <= RANGE; s += worldStep) {
+      const sx0 = -sa * s;
+      const sy0 = ca * s;
+      let inDraw = false;
+      let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+      for (let t = -RANGE; t <= RANGE; t += sampleStep) {
+        const sx = sx0 + ca * t;
+        const sy = sy0 + sa * t;
+        const inBounds = (sx >= SX_MIN && sx <= SX_MAX &&
+                          sy >= SY_MIN && sy <= SY_MAX);
+        let draw = false;
+        if (inBounds) {
+          const idx = bufIdx(buf, sx, sy);
+          if (idx >= 0 && buf.surface[idx] === 1) {
+            draw = computeDarkness(buf, idx) > L.threshold;
+          }
+        }
+        if (draw) {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
+        } else if (inDraw) {
+          if (Math.hypot(lastX - dx0, lastY - dy0) > worldStep * 0.4) {
+            paths.push([[dx0, dy0], [lastX, lastY]]);
+          }
+          inDraw = false;
+        }
+      }
+      if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > worldStep * 0.4) {
+        paths.push([[dx0, dy0], [lastX, lastY]]);
+      }
+    }
+  }
+  return paths;
+}
+
+// ============================================================
+// Vertical-only hatcher: single pass of evenly-spaced vertical scan
+// lines, clipped to the blob surface. Reads as engraving / wood-cut.
+// ============================================================
+function generateVerticalHatches(state, buf) {
+  const paths = [];
+  const baseSpacing = Math.max(0.002, state.lw * state.density * WORLD_PER_MM);
+  const sampleStep = baseSpacing * 0.4;
+  const RANGE = 1.8;
+  // Four-level vertical hatching. Each level is a separate set of
+  // columns at an OFFSET position so the layers interleave on the page.
+  //
+  //   Layer 0:  offset 0       always (level 1)
+  //   Layer 1:  offset 0.5     darkness > 0.30 (level 2 — 2× density)
+  //   Layer 2:  offset 0.25    darkness > 0.55 (level 3 — 3× density)
+  //   Layer 3:  offset 0.75    darkness > 0.75 (level 4 — 4× density)
+  //
+  // All offsets are fractions of baseSpacing, so the four sub-grids
+  // interleave to give true tonal variation across light → dark.
+  const layers = [
+    { offset: 0.00 * baseSpacing, threshold: -0.01 },
+    { offset: 0.50 * baseSpacing, threshold: 0.30  },
+    { offset: 0.25 * baseSpacing, threshold: 0.55  },
+    { offset: 0.75 * baseSpacing, threshold: 0.75  }
+  ];
+  for (const L of layers) {
+    for (let sx = -RANGE + L.offset; sx <= RANGE; sx += baseSpacing) {
+      let inDraw = false;
+      let sy0 = 0, lastY = 0;
+      function flush() {
+        if (inDraw && Math.abs(lastY - sy0) > baseSpacing * 0.4) {
+          paths.push([[sx, sy0], [sx, lastY]]);
+        }
+        inDraw = false;
+      }
+      for (let sy = SY_MIN; sy <= SY_MAX; sy += sampleStep) {
+        const idx = bufIdx(buf, sx, sy);
+        let draw = false;
+        if (idx >= 0 && buf.surface[idx] === 1) {
+          draw = L.threshold < 0 || computeDarkness(buf, idx) > L.threshold;
+        }
+        if (draw) {
+          if (!inDraw) { sy0 = sy; inDraw = true; }
+          lastY = sy;
+        } else if (inDraw) {
+          flush();
+        }
+      }
+      flush();
+    }
+  }
+  return paths;
+}
+
+// ============================================================
+// Beam-mask post-process: scenes can return { beamMask: { apex, targetSx,
+// targetSy, halfAngleDeg } } to carve a wedge of negative space out of
+// the sky. The apex is a world position (projected to screen here);
+// targetSx/Sy give the direction of the beam in screen space, and any
+// sky pixel inside [centreAngle ± halfAngle] of the wedge is reclassified
+// from surface=0 to surface=4 ("beam"). Existing sky generators all gate
+// on surface===0 so they automatically skip the beam region.
+// ============================================================
+function applyBeamMask(buf, spec) {
+  if (!spec || !spec.apex) return;
+  const apexScreen = worldToScreen(spec.apex);
+  if (!apexScreen) return;
+  const aSx = apexScreen[0], aSy = apexScreen[1];
+  // Accept either an explicit direction vector (dirSx/dirSy — easier to
+  // reason about for "horizontal beam") or an absolute screen target
+  // (targetSx/targetSy) as a back-compat fallback.
+  let bdx, bdy;
+  if (spec.dirSx != null || spec.dirSy != null) {
+    bdx = spec.dirSx != null ? spec.dirSx : 0;
+    bdy = spec.dirSy != null ? spec.dirSy : 0;
+  } else {
+    bdx = (spec.targetSx != null ? spec.targetSx : -aSx) - aSx;
+    bdy = (spec.targetSy != null ? spec.targetSy : aSy + 1.0) - aSy;
+  }
+  const bMag = Math.hypot(bdx, bdy);
+  if (bMag < 1e-6) return;
+  bdx /= bMag; bdy /= bMag;
+  const cosHalf = Math.cos((spec.halfAngleDeg != null ? spec.halfAngleDeg : 12) * Math.PI / 180);
+  const W = buf.W, H = buf.H;
+  for (let py = 0; py < H; py++) {
+    const sy = SY_MAX - (py / (H - 1)) * (SY_MAX - SY_MIN);
+    for (let px = 0; px < W; px++) {
+      const idx = py * W + px;
+      if (buf.surface[idx] !== 0) continue;
+      const sx = SX_MIN + (px / (W - 1)) * (SX_MAX - SX_MIN);
+      const vx = sx - aSx;
+      const vy = sy - aSy;
+      const vMag = Math.hypot(vx, vy);
+      if (vMag < 1e-6) continue;
+      const dot = (vx * bdx + vy * bdy) / vMag;
+      if (dot > cosHalf) buf.surface[idx] = 4;
+    }
+  }
+}
+
+// ============================================================
+// Tone mapping on buf.light. Applied after raymarching, before the hatcher
+// reads brightness for stroke-density decisions.
+//
+//   brightness:  uniform offset on the final brightness value
+//   contrast:    multiplicative scaling around 0.5
+//   gamma:       power curve (gamma > 1 deepens shadows)
+//   posterLevels: quantize the result into N discrete levels
+//                 (1 = no quantization)
+//
+// Only the blob surfaces (buf.surface === 1) are affected; sky and
+// ground keep their original light.
+// ============================================================
+function applyToneMap(buf, state) {
+  const b = state.brightness || 0;
+  const c = state.contrast != null ? state.contrast : 1;
+  const g = state.gamma != null ? state.gamma : 1;
+  const p = state.posterLevels != null ? state.posterLevels : 1;
+  const skipTransform = (b === 0 && c === 1 && g === 1);
+  const skipPoster = (p <= 1);
+  if (skipTransform && skipPoster) return;
+  for (let i = 0; i < buf.light.length; i++) {
+    if (buf.surface[i] !== 1) continue;
+    let v = buf.light[i];
+    if (!skipTransform) {
+      v = (v - 0.5) * c + 0.5 + b;
+      if (v < 0) v = 0; else if (v > 1) v = 1;
+      if (g !== 1) v = Math.pow(v, g);
+    }
+    if (!skipPoster) {
+      // Quantize into p discrete buckets: {0, 1/(p-1), 2/(p-1), ..., 1}.
+      // Use min(floor(v * p), p - 1) so v = 1.0 maps to the top bucket.
+      let bucket = Math.floor(v * p);
+      if (bucket >= p) bucket = p - 1;
+      v = bucket / (p - 1);
+    }
+    buf.light[i] = v;
+  }
+}
+
+// ============================================================
+// Curved hatching: trace evenly-spaced streamlines through a direction
+// field defined per buffer pixel. Three field flavours are available:
+//
+//   isoDepth   — perpendicular to the depth gradient (topographic
+//                contours: lines of constant distance from the camera).
+//   projNormal — perpendicular to the projected surface normal in
+//                screen space (continuous version of the scan-line
+//                hatcher's per-pixel primary angle).
+//   principal  — direction of slowest change of the lighting field; a
+//                cheap stand-in for principal curvature.
+// ============================================================
+function bufPxToScreen(buf, px, py) {
+  const sx = SX_MIN + (px / (buf.W - 1)) * (SX_MAX - SX_MIN);
+  const sy = SY_MAX - (py / (buf.H - 1)) * (SY_MAX - SY_MIN);
+  return [sx, sy];
+}
+
+// Sample a Float32 buffer with a 3x3 box blur centred at (ix, iy),
+// skipping pixels where mask is not 1. Returns 0 if no valid samples.
+function sampleSmooth(buf, src, ix, iy) {
+  const W = buf.W, H = buf.H;
+  let sum = 0, count = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    const y = iy + dy;
+    if (y < 0 || y >= H) continue;
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = ix + dx;
+      if (x < 0 || x >= W) continue;
+      const j = y * W + x;
+      if (buf.surface[j] === 1) { sum += src[j]; count++; }
+    }
+  }
+  return count > 0 ? sum / count : src[iy * W + ix];
+}
+
+// Wide-stencil gradient — central difference over R pixels each side,
+// smoothed by a 3x3 box around each sample point. Much more stable
+// than 1-pixel central diff on noisy SDF/light buffers.
+function gradient(buf, src, ix, iy, R) {
+  const W = buf.W, H = buf.H;
+  if (ix < R || ix >= W - R || iy < R || iy >= H - R) return null;
+  if (buf.surface[iy * W + ix] !== 1) return null;
+  const dR = sampleSmooth(buf, src, ix + R, iy);
+  const dL = sampleSmooth(buf, src, ix - R, iy);
+  const dD = sampleSmooth(buf, src, ix, iy + R);
+  const dU = sampleSmooth(buf, src, ix, iy - R);
+  return [(dR - dL) / (2 * R), (dD - dU) / (2 * R)];
+}
+
+function fieldIsoDepth(buf, ix, iy) {
+  const g = gradient(buf, buf.depth, ix, iy, 3);
+  if (!g) return null;
+  const mag = Math.hypot(g[0], g[1]);
+  if (mag < 1e-6) return [1, 0];
+  return [-g[1] / mag, g[0] / mag];
+}
+
+function fieldProjNormal(buf, ix, iy) {
+  const i = iy * buf.W + ix;
+  if (buf.surface[i] !== 1) return null;
+  // Box-blur the projected normal over a 3x3 neighbourhood so the
+  // streamline direction is smoother than the raw per-pixel normal.
+  const nxAvg = sampleSmooth(buf, buf.nx, ix, iy);
+  const nyAvg = sampleSmooth(buf, buf.ny, ix, iy);
+  const mag = Math.hypot(nxAvg, nyAvg);
+  if (mag < 1e-4) return [1, 0];
+  return [-nyAvg / mag, nxAvg / mag];
+}
+
+function fieldPrincipal(buf, ix, iy) {
+  const g = gradient(buf, buf.light, ix, iy, 3);
+  if (!g) return null;
+  const mag = Math.hypot(g[0], g[1]);
+  if (mag < 1e-6) return [1, 0];
+  return [-g[1] / mag, g[0] / mag];
+}
+
+function generateCurveHatches(state, buf, fieldFn) {
+  const W = buf.W, H = buf.H;
+  const occ = new Uint8Array(W * H);
+
+  // Spacing in pixel space, derived from the same lw × density product
+  // the scan-line hatcher uses, but mapped through buffer resolution.
+  const spacingMM = state.lw * state.density;
+  const spacingWorld = Math.max(0.002, spacingMM * WORLD_PER_MM);
+  const pxPerWorld = (W - 1) / (SX_MAX - SX_MIN);
+  const spacingPx = Math.max(2, Math.round(spacingWorld * pxPerWorld));
+  const sepSqr = spacingPx * spacingPx;
+
+  const stepPx = 1.0;
+  const maxSteps = Math.max(80, Math.round(Math.max(W, H) * 0.8));
+
+  function isFreeSeed(px, py) {
+    const ix = Math.round(px), iy = Math.round(py);
+    if (ix < 0 || ix >= W || iy < 0 || iy >= H) return false;
+    if (buf.surface[iy * W + ix] !== 1) return false;
+    const r = spacingPx;
+    const x0 = Math.max(0, ix - r), x1 = Math.min(W - 1, ix + r);
+    const y0 = Math.max(0, iy - r), y1 = Math.min(H - 1, iy + r);
+    for (let y = y0; y <= y1; y++) {
+      const dy = y - iy;
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - ix;
+        if (dx * dx + dy * dy > sepSqr) continue;
+        if (occ[y * W + x]) return false;
+      }
+    }
+    return true;
+  }
+
+  function markStrip(px, py) {
+    const ix = Math.round(px), iy = Math.round(py);
+    if (ix < 0 || ix >= W || iy < 0 || iy >= H) return;
+    occ[iy * W + ix] = 1;
+  }
+
+  function trace(px, py, dirSign, ignoreFlagsAroundSeed) {
+    const points = [[px, py]];
+    let lastDx = 0, lastDy = 0;
+    let stepsSinceSeed = 0;
+    for (let step = 0; step < maxSteps; step++) {
+      const ix = Math.round(px), iy = Math.round(py);
+      if (ix < 0 || ix >= W || iy < 0 || iy >= H) break;
+      if (buf.surface[iy * W + ix] !== 1) break;
+      const f = fieldFn(buf, ix, iy);
+      if (!f) break;
+      let dx = f[0] * dirSign;
+      let dy = f[1] * dirSign;
+      // Flip if reversing — preserves orientation of the streamline.
+      if (step > 0 && (lastDx * dx + lastDy * dy) < 0) { dx = -dx; dy = -dy; }
+      px += dx * stepPx;
+      py += dy * stepPx;
+      lastDx = dx; lastDy = dy;
+      stepsSinceSeed++;
+      // After we've moved away from the seed (≥ spacing*0.6), enforce
+      // separation from other streamlines.
+      if (stepsSinceSeed > spacingPx * 0.6 && !ignoreFlagsAroundSeed) {
+        const px2 = Math.round(px), py2 = Math.round(py);
+        if (px2 < 0 || px2 >= W || py2 < 0 || py2 >= H) break;
+        if (occ[py2 * W + px2]) break;
+      }
+      points.push([px, py]);
+    }
+    return points;
+  }
+
+  const paths = [];
+  const seedStride = Math.max(2, Math.floor(spacingPx * 0.7));
+  for (let py = 1; py < H - 1; py += seedStride) {
+    for (let px = 1; px < W - 1; px += seedStride) {
+      const idx = py * W + px;
+      if (buf.surface[idx] !== 1) continue;
+      if (!isFreeSeed(px, py)) continue;
+
+      // Trace both directions; ignore occupancy near the seed so the
+      // forward and backward halves can join through the seed cell.
+      const fwd = trace(px, py, +1, false);
+      const bwd = trace(px, py, -1, false);
+      const merged = bwd.slice(1).reverse().concat(fwd);
+      if (merged.length < 3) continue;
+
+      for (const [pxp, pyp] of merged) markStrip(pxp, pyp);
+
+      paths.push(merged.map(p => bufPxToScreen(buf, p[0], p[1])));
+    }
+  }
+
+  // Multi-level densification — 3 additional passes following the SAME
+  // field as the main pass, each weaving streamlines at progressively
+  // tighter spacing and gated by a progressively darker threshold.
+  // Combined with the main pass this gives 4 discrete tonal levels
+  // across the surface, applicable uniformly to iso-depth / projNormal
+  // / principal. A SHARED occupancy grid means each tighter layer
+  // fills in BETWEEN the previous layer's strokes.
+  const densificationLayers = [
+    { factor: 0.65, threshold: 0.30 },  // level 2
+    { factor: 0.45, threshold: 0.55 },  // level 3
+    { factor: 0.30, threshold: 0.75 }   // level 4
+  ];
+  // Re-use the SAME `occ` grid the main pass populated, so densification
+  // strokes can't sit directly on top of main-pass streamlines.
+  for (const layer of densificationLayers) {
+    const sepPx2 = Math.max(1.5, spacingPx * layer.factor);
+    const sepSqr2 = sepPx2 * sepPx2;
+    const darkThreshold = layer.threshold;
+    const isFreeSeed2 = function (px, py) {
+      const ix = Math.round(px), iy = Math.round(py);
+      if (ix < 0 || ix >= W || iy < 0 || iy >= H) return false;
+      if (buf.surface[iy * W + ix] !== 1) return false;
+      const i = iy * W + ix;
+      if (computeDarkness(buf, i) < darkThreshold) return false;
+      const r = Math.ceil(sepPx2);
+      const x0 = Math.max(0, ix - r), x1 = Math.min(W - 1, ix + r);
+      const y0 = Math.max(0, iy - r), y1 = Math.min(H - 1, iy + r);
+      for (let y = y0; y <= y1; y++) {
+        const dy = y - iy;
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - ix;
+          if (dx * dx + dy * dy > sepSqr2) continue;
+          if (occ[y * W + x]) return false;
+        }
+      }
+      return true;
+    };
+    const trace2 = function (px, py, dirSign) {
+      const points = [[px, py]];
+      let lastDx = 0, lastDy = 0;
+      let stepsSinceSeed = 0;
+      for (let step = 0; step < maxSteps; step++) {
+        const ix = Math.round(px), iy = Math.round(py);
+        if (ix < 0 || ix >= W || iy < 0 || iy >= H) break;
+        if (buf.surface[iy * W + ix] !== 1) break;
+        const i = iy * W + ix;
+        // Trace allowed to taper slightly past the threshold so lines
+        // end gracefully into lit regions.
+        if (computeDarkness(buf, i) < darkThreshold - 0.10) break;
+        const f = fieldFn(buf, ix, iy);
+        if (!f) break;
+        let dx = f[0] * dirSign;
+        let dy = f[1] * dirSign;
+        if (step > 0 && (lastDx * dx + lastDy * dy) < 0) { dx = -dx; dy = -dy; }
+        px += dx * stepPx;
+        py += dy * stepPx;
+        lastDx = dx; lastDy = dy;
+        stepsSinceSeed++;
+        if (stepsSinceSeed > sepPx2 * 0.6) {
+          const px2 = Math.round(px), py2 = Math.round(py);
+          if (px2 < 0 || px2 >= W || py2 < 0 || py2 >= H) break;
+          if (occ[py2 * W + px2]) break;
+        }
+        points.push([px, py]);
+      }
+      return points;
+    };
+    const seedStride2 = Math.max(2, Math.floor(sepPx2));
+    const seedOffset  = Math.floor(seedStride2 / 2);
+    for (let py = seedOffset; py < H - 1; py += seedStride2) {
+      for (let px = seedOffset; px < W - 1; px += seedStride2) {
+        const idx = py * W + px;
+        if (buf.surface[idx] !== 1) continue;
+        if (!isFreeSeed2(px, py)) continue;
+        const fwd = trace2(px, py, +1);
+        const bwd = trace2(px, py, -1);
+        const merged = bwd.slice(1).reverse().concat(fwd);
+        if (merged.length < 3) continue;
+        for (const [pxp, pyp] of merged) {
+          const ix = Math.round(pxp), iy = Math.round(pyp);
+          if (ix >= 0 && ix < W && iy >= 0 && iy < H) occ[iy * W + ix] = 1;
+        }
+        paths.push(merged.map(p => bufPxToScreen(buf, p[0], p[1])));
+      }
+    }
+  }
+
+  return paths;
+}
+
+// ============================================================
+// Ground hatches: horizontal lines spaced evenly in WORLD z (depth),
+// so they bunch toward the horizon and feel like they recede.
+//
+// Camera at (0, 0, -5) hitting ground at y = -0.5 via image plane at z = -1:
+//   ground_z = -5 - 2/sy          ⇔          sy = -2 / (ground_z + 5)
+// Stepping ground_z by a constant amount produces sy steps that shrink
+// toward the horizon — the perspective compression we want.
+// ============================================================
+// Wave-style ground: same perspective spacing as the perspective lines,
+// but each scan line is displaced by 2-D noise (two octaves) so it
+// undulates. Wave amplitude tapers to zero at the horizon (perspective).
+// Driven by `state.waviness`.
+// Two-pass approximate Euclidean distance transform on the blob mask
+// (buf.surface === 1). Returns a Float32Array of distances in PIXEL
+// units; ground / sky pixels carry the distance to the nearest blob
+// pixel. Diagonal weight √2 ≈ 1.4142.
+function computeBlobDistanceTransform(buf) {
+  const W = buf.W, H = buf.H;
+  const dist = new Float32Array(W * H);
+  const big = 9999;
+  for (let i = 0; i < W * H; i++) {
+    dist[i] = (buf.surface[i] === 1) ? 0 : big;
+  }
+  const D = 1.4142;
+  // Forward pass — looks up + left.
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      let d = dist[i];
+      if (x > 0)              d = Math.min(d, dist[i - 1]    + 1);
+      if (y > 0)              d = Math.min(d, dist[i - W]    + 1);
+      if (x > 0 && y > 0)     d = Math.min(d, dist[i - W - 1] + D);
+      if (x < W - 1 && y > 0) d = Math.min(d, dist[i - W + 1] + D);
+      dist[i] = d;
+    }
+  }
+  // Backward pass — looks down + right.
+  for (let y = H - 1; y >= 0; y--) {
+    for (let x = W - 1; x >= 0; x--) {
+      const i = y * W + x;
+      let d = dist[i];
+      if (x < W - 1)                  d = Math.min(d, dist[i + 1]    + 1);
+      if (y < H - 1)                  d = Math.min(d, dist[i + W]    + 1);
+      if (x < W - 1 && y < H - 1)     d = Math.min(d, dist[i + W + 1] + D);
+      if (x > 0 && y < H - 1)         d = Math.min(d, dist[i + W - 1] + D);
+      dist[i] = d;
+    }
+  }
+  return dist;
+}
+
+// Zen sand-garden ground (karesansui) — inspired by Piter Pasma's URH
+// #420 "Sand Garden". Horizontal scan lines on the ground are displaced
+// vertically by cos(distFromBlob × freq), where distFromBlob is the
+// 2D screen-space distance from each ground pixel to the nearest blob
+// pixel. The ripple amplitude falls off exponentially with distance,
+// so it dies away into a quiet horizon. Reads as raked sand with
+// concentric ripples surrounding each rock — exactly the look of a
+// Japanese zen garden in plan.
+// Compute the world-space (xz) centroid of the blob silhouette, projected
+// down to the ground plane. Used as the ripple-ring anchor for the sand
+// garden so the rings wrap around where the blob actually MEETS the
+// ground in 3D, not where it lands on the 2D screen.
+// World-space 2-D distance transform on the blob's ground silhouette.
+// For each ground sample, returns the distance from that sample to the
+// nearest world (x, z) point inside the blob's projected footprint.
+// Used by the sand-garden ripples so the concentric rings follow the
+// ACTUAL silhouette of the object — irregular shapes get irregular
+// rings, not circles around a centroid.
+function blobGroundDistanceField(buf, sdf) {
+  // 1) Collect world (x, z) positions of the blob's hit points to find a
+  //    reasonable BOUNDING BOX for the footprint. (Not used to mark
+  //    the footprint itself — that's done by SDF probing below.)
+  const W = buf.W, H = buf.H;
+  const stride = 4;
+  let xMin = Infinity, xMax = -Infinity, zMin = Infinity, zMax = -Infinity;
+  let anyBlob = false;
+  for (let py = 0; py < H; py += stride) {
+    for (let px = 0; px < W; px += stride) {
+      const idx = py * W + px;
+      if (buf.surface[idx] !== 1) continue;
+      const t = buf.depth[idx];
+      if (t <= 0) continue;
+      const sx = SX_MIN + (px / (W - 1)) * (SX_MAX - SX_MIN);
+      const sy = SY_MAX - (py / (H - 1)) * (SY_MAX - SY_MIN);
+      const r = castRay(sx, sy);
+      const wx = CAM[0] + r[0] * t;
+      const wz = CAM[2] + r[2] * t;
+      if (wx < xMin) xMin = wx;
+      if (wx > xMax) xMax = wx;
+      if (wz < zMin) zMin = wz;
+      if (wz > zMax) zMax = wz;
+      anyBlob = true;
+    }
+  }
+  if (!anyBlob) return null;
+  // 2) Expand the bbox so ripples have room to propagate outward.
+  const expand = 5.0;
+  xMin -= expand; xMax += expand;
+  zMin -= expand; zMax += expand;
+  // 3) Allocate the coarse distance grid.
+  const G = 180;
+  const dist = new Float32Array(G * G);
+  const big = 9e9;
+  for (let i = 0; i < G * G; i++) dist[i] = big;
+  const cellW = (xMax - xMin) / G;
+  const cellH = (zMax - zMin) / G;
+  // 4) Mark grid cells where the OBJECT'S SDF intersects the ground
+  //    plane (y = GROUND_Y). The previous approach used camera hit
+  //    points projected to (x, z) — but those describe the visible
+  //    SURFACE of the object, which for tall thin objects gives a
+  //    near-zero footprint. Probing the SDF at the ground plane gives
+  //    the true silhouette where the object meets the sand, and rings
+  //    correctly hug its actual outline (a column → circle, a colonnade
+  //    → row of disks, a long rock → elongated shape).
+  if (sdf) {
+    for (let z = 0; z < G; z++) {
+      for (let x = 0; x < G; x++) {
+        const wx = xMin + (x + 0.5) * cellW;
+        const wz = zMin + (z + 0.5) * cellH;
+        if (sdf(wx, GROUND_Y, wz) <= 0) {
+          dist[z * G + x] = 0;
+        }
+      }
+    }
+  }
+  // 5) Two-pass Chamfer distance transform. Distances are in CELL UNITS;
+  // we convert back to world units at sample time.
+  const D = 1.4142;
+  for (let z = 0; z < G; z++) {
+    for (let x = 0; x < G; x++) {
+      const i = z * G + x;
+      let d = dist[i];
+      if (x > 0)              d = Math.min(d, dist[i - 1] + 1);
+      if (z > 0)              d = Math.min(d, dist[i - G] + 1);
+      if (x > 0 && z > 0)     d = Math.min(d, dist[i - G - 1] + D);
+      if (x < G - 1 && z > 0) d = Math.min(d, dist[i - G + 1] + D);
+      dist[i] = d;
+    }
+  }
+  for (let z = G - 1; z >= 0; z--) {
+    for (let x = G - 1; x >= 0; x--) {
+      const i = z * G + x;
+      let d = dist[i];
+      if (x < G - 1)                  d = Math.min(d, dist[i + 1] + 1);
+      if (z < G - 1)                  d = Math.min(d, dist[i + G] + 1);
+      if (x < G - 1 && z < G - 1)     d = Math.min(d, dist[i + G + 1] + D);
+      if (x > 0 && z < G - 1)         d = Math.min(d, dist[i + G - 1] + D);
+      dist[i] = d;
+    }
+  }
+  return { grid: dist, G: G, xMin: xMin, zMin: zMin, cellW: cellW, cellH: cellH };
+}
+
+// Bilinear sample of the distance field at a world (x, z) position.
+// Returns world-unit distance to the nearest point on the silhouette.
+function sampleGroundDistance(field, worldX, worldZ) {
+  if (!field) return 9e9;
+  const gxf = (worldX - field.xMin) / field.cellW;
+  const gzf = (worldZ - field.zMin) / field.cellH;
+  if (gxf < 0 || gxf >= field.G - 1 || gzf < 0 || gzf >= field.G - 1) return 9e9;
+  const x0 = Math.floor(gxf), z0 = Math.floor(gzf);
+  const fx = gxf - x0, fz = gzf - z0;
+  const G = field.G;
+  const d00 = field.grid[z0 * G + x0];
+  const d10 = field.grid[z0 * G + x0 + 1];
+  const d01 = field.grid[(z0 + 1) * G + x0];
+  const d11 = field.grid[(z0 + 1) * G + x0 + 1];
+  const d0 = d00 * (1 - fx) + d10 * fx;
+  const d1 = d01 * (1 - fx) + d11 * fx;
+  // Convert from cell units to world units (use the smaller cell axis
+  // as the unit — the transform was built with isotropic Chamfer steps).
+  return (d0 * (1 - fz) + d1 * fz) * Math.min(field.cellW, field.cellH);
+}
+
+// Sand-garden displacement at world ground position (worldX, worldZ).
+// Rings emanate from the actual SHAPE of the blob's ground silhouette
+// via a world-space distance transform — irregular silhouettes produce
+// irregular rings that follow the contour.
+//
+//   amp  — pure HEIGHT of each ripple (driven by Waviness).
+//   freq — number of rings per world unit (driven by Ripple freq).
+//
+// Falloff (0.55) lets the rings persist outward several wavelengths
+// so the count and the height are perceptually independent.
+function sandGardenRipple(worldX, worldZ, field, freq, amp) {
+  const distFromEdge = sampleGroundDistance(field, worldX, worldZ);
+  if (distFromEdge >= 9e8) return 0;
+  const fadeRate = 0.55;
+  const falloff = Math.exp(-distFromEdge * fadeRate);
+  return Math.cos(distFromEdge * freq) * amp * falloff;
+}
+
+function generateGroundSandGarden(state, buf, sdf) {
+  const paths = [];
+  if (syHorizon <= SY_MIN) return paths;
+  const sampleStep = 0.004;
+  // SAND GARDEN uses a FLAT line spacing across the whole ground — not
+  // the d² perspective growth the regular ground uses. Perspective
+  // compression made the foreground much sparser than the horizon
+  // (10x larger steps) which left the foreground ripples illegible.
+  // Karesansui-style raked sand reads better with uniform line density
+  // anyway, so we just use the tight (minDsy) step everywhere.
+  const baseStep = Math.max(state.lw * WORLD_PER_MM * 2.0, 0.006);
+  const maxDsy = baseStep;  // amplitude reference — also the line spacing
+  // World-space ring anchor — where the blob touches the ground, with
+  // a radius equal to the blob's mean horizontal extent.
+  const field = blobGroundDistanceField(buf, sdf);
+  // Amplitude scales with line spacing so peaks stay near their own row.
+  // Sand garden uses its OWN waviness control, decoupled from sky waviness.
+  const sandW = state.sandWaviness != null ? state.sandWaviness : 1;
+  const rippleAmp = maxDsy * 1.10 * sandW;
+  const rippleFreq = state.rippleFreq != null ? state.rippleFreq : 7.0;
+  let sy = SY_MIN;
+  while (sy < syHorizon) {
+    const step = baseStep;
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      // Project (sx, sy) onto the ground plane to get the world-space
+      // ground point under this pixel.
+      const r = castRay(sx, sy);
+      if (r[1] >= 0) { flush(); continue; }
+      const tg = (GROUND_Y - CAM[1]) / r[1];
+      if (tg <= 0) { flush(); continue; }
+      const worldX = CAM[0] + r[0] * tg;
+      const worldZ = CAM[2] + r[2] * tg;
+      const ripple = sandGardenRipple(worldX, worldZ, field, rippleFreq, rippleAmp);
+      const wavySy = sy + ripple;
+      const idx2 = bufIdx(buf, sx, wavySy);
+      const onGround = (idx2 >= 0 && buf.surface[idx2] === 2);
+      if (onGround) {
+        polyline.push([sx, wavySy]);
+      } else {
+        flush();
+      }
+    }
+    flush();
+    sy += step;
+  }
+  return paths;
+}
+
+function generateGroundWaves(state, buf) {
+  const paths = [];
+  const sampleStep = 0.005;
+  const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
+  const minDsy = Math.max(state.lw * WORLD_PER_MM * 2.0, 0.006);
+  const fullRange = syHorizon - SY_MIN;
+  if (fullRange <= 0) return paths;
+
+  const wave2D = makeNoise2D(state.seed + ':groundWaves');
+  // Amplitude is tied to line spacing so wavy lines stay near their
+  // neighbours instead of crossing several rows. The waviness slider
+  // scales it further.
+  const ampBase = maxDsy * 0.50 * (state.waviness != null ? state.waviness : 1);
+
+  let sy = SY_MIN;
+  const stopAt = syHorizon;
+  while (sy < stopAt) {
+    const d = (syHorizon - sy) / fullRange;       // 1 at bottom → 0 at horizon
+    const step = minDsy + (maxDsy - minDsy) * d * d;
+    // Taper amplitude with distance from horizon: bold near, subtle far.
+    // Keep a small floor so distant rows aren't perfectly flat.
+    const amp = ampBase * (0.30 + 0.70 * d * d);
+
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      // Three long-wavelength sine swells with slow phase drift in y so
+      // adjacent rows have crests at almost-the-same x — coherent waves,
+      // not independent per-row noise.
+      const swell1 = Math.sin(sx * 3.0 + sy * 0.9 + 0.0) * 0.45;
+      const swell2 = Math.sin(sx * 5.5 - sy * 0.5 + 1.7) * 0.28;
+      const swell3 = Math.sin(sx * 1.6 + sy * 1.3 + 4.2) * 0.40;
+      // Slow-varying organic detail. Both noise frequencies are LOW in y
+      // so consecutive rows produce similar detail patterns.
+      const detail = (wave2D(sx * 3.5 + sy * 0.4, sy * 0.7) - 0.5) * 0.40;
+      const wave = swell1 + swell2 + swell3 + detail;
+      const wavySy = sy + wave * amp;
+
+      const idx = bufIdx(buf, sx, wavySy);
+      const onGround = (idx >= 0 && buf.surface[idx] === 2);
+      if (onGround) {
+        polyline.push([sx, wavySy]);
+      } else {
+        flush();
+      }
+    }
+    flush();
+    sy += step;
+  }
+  return paths;
+}
+
+// Cast-shadow dashes on the ground: short perpendicular (vertical)
+// strokes scattered through ground regions where buf.shadow is set.
+// Pairs with whatever ground style is active — adds crosshatch only in
+// shadowed areas.
+function generateGroundShadows(state, buf, sdf) {
+  const paths = [];
+  if (syHorizon <= SY_MIN) return paths;
+  const spacing = state.lw * state.density * WORLD_PER_MM;
+  const dashLen = spacing * 0.90;
+  const xStep = spacing * 0.55;
+  const yStep = spacing * 0.45;
+  // If the sand-garden ground style is active, displace each shadow
+  // dash by the SAME world-space ring ripple so the cast shadow wobbles
+  // with the sand pattern instead of stippling a flat grid over it.
+  const useSandGarden = (state.groundStyle === 'sandGarden');
+  const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
+  // Sand garden uses its own waviness — decoupled from sky waviness.
+  const sandW = state.sandWaviness != null ? state.sandWaviness : 1;
+  const rippleAmp = useSandGarden ? maxDsy * 1.10 * sandW : 0;
+  const rippleFreq = state.rippleFreq != null ? state.rippleFreq : 7.0;
+  const field = useSandGarden ? blobGroundDistanceField(buf, sdf) : null;
+  for (let sy = SY_MIN + 0.01; sy < syHorizon - 0.005; sy += yStep) {
+    for (let sx = SX_MIN + 0.01; sx <= SX_MAX - 0.01; sx += xStep) {
+      const idx = bufIdx(buf, sx, sy);
+      if (idx < 0 || buf.surface[idx] !== 2) continue;
+      const s = buf.shadow[idx];
+      if (s < 0.40) continue;
+      const len = dashLen * (0.6 + 0.4 * s);
+      let drawSy = sy;
+      if (useSandGarden) {
+        const r = castRay(sx, sy);
+        if (r[1] < 0) {
+          const tg = (GROUND_Y - CAM[1]) / r[1];
+          if (tg > 0) {
+            const worldX = CAM[0] + r[0] * tg;
+            const worldZ = CAM[2] + r[2] * tg;
+            drawSy = sy + sandGardenRipple(worldX, worldZ, field, rippleFreq, rippleAmp);
+          }
+        }
+      }
+      paths.push([
+        [sx, drawSy - len / 2],
+        [sx, drawSy + len / 2]
+      ]);
+    }
+  }
+  return paths;
+}
+
+function generateGroundHatches(state, buf) {
+  // Iterate sy DIRECTLY (not via z) with a smoothly shrinking step.
+  // This avoids the "skip 1 every N" alternation pattern of the previous
+  // algorithm, which caused the visible repeating bands.
+  //
+  //   step(sy) = minDsy + (maxDsy - minDsy) · ((dist_to_horizon)/full_range)²
+  //
+  // → sparse at the bottom (large step), tight at the horizon (~minDsy).
+  const paths = [];
+  const sampleStep = 0.003;
+
+  // Sparse step at the far end (page bottom); tight step near horizon.
+  // minDsy floor is 2× line width so even the densest lines keep a visible
+  // gap — otherwise the horizon edge reads as a solid black band.
+  const maxDsy = state.lw * state.density * WORLD_PER_MM * 2.0;
+  const minDsy = Math.max(state.lw * WORLD_PER_MM * 2.0, 0.006);
+
+  const fullRange = syHorizon - SY_MIN;
+  if (fullRange <= 0) return paths;
+
+  let sy = SY_MIN;
+  // Iterate right up to the horizon so the topmost ground line sits
+  // directly beneath the horizon stroke (no white gap between them).
+  const stopAt = syHorizon;
+
+  while (sy < stopAt) {
+    const d = (syHorizon - sy) / fullRange;          // 1 at bottom → 0 at horizon
+    const step = minDsy + (maxDsy - minDsy) * d * d; // squared falloff
+
+    let inDraw = false;
+    let x0 = 0, lastX = 0;
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      const idx = bufIdx(buf, sx, sy);
+      const draw = (idx >= 0 && buf.surface[idx] === 2);
+      if (draw) {
+        if (!inDraw) { x0 = sx; inDraw = true; }
+        lastX = sx;
+      } else if (inDraw) {
+        if (lastX - x0 > 0.005) paths.push([[x0, sy], [lastX, sy]]);
+        inDraw = false;
+      }
+    }
+    if (inDraw && lastX - x0 > 0.005) paths.push([[x0, sy], [lastX, sy]]);
+
+    sy += step;
+  }
+  return paths;
+}
+
+// ============================================================
+// Sky hatches: 45° scan lines clipped to sky pixels, dashed with a
+// top-down fade — solid near the top of the page, fading to nothing
+// as the scan line approaches the horizon.
+// ============================================================
+// Stars: sparse Poisson-disc scatter of small crosses / dots in the sky
+// region. Pairs with any scene as the sky style — gives a clear-night
+// reading without any horizon hatching at all.
+function generateStarSky(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const rng = makeRng(state.seed + ':stars');
+  const minDist = 0.045;
+  const pad = 0.03;
+  const stars = poissonScatter(rng, minDist, {
+    xMin: SX_MIN + pad, xMax: SX_MAX - pad,
+    yMin: syHorizon + pad, yMax: SY_MAX - pad
+  }, 18);
+  for (const [sx, sy] of stars) {
+    const idx = bufIdx(buf, sx, sy);
+    if (idx >= 0 && buf.surface[idx] !== 0) continue;       // skip if blob in front
+    const size = 0.005 + rng() * 0.011;
+    const kind = rng();
+    if (kind < 0.48) {
+      // Plus-cross — most common star
+      paths.push([[sx - size, sy], [sx + size, sy]]);
+      paths.push([[sx, sy - size], [sx, sy + size]]);
+    } else if (kind < 0.78) {
+      // Dim point — single short dash
+      paths.push([[sx - size * 0.35, sy], [sx + size * 0.35, sy]]);
+    } else if (kind < 0.92) {
+      // 3-line asterisk (typographic *): three line segments through
+      // the centre, 60° apart. Vertical + 30° + 150° orientation gives
+      // a clean star with a hint of vertical alignment.
+      const a3 = [Math.PI / 2, Math.PI / 6, 5 * Math.PI / 6];
+      for (const a of a3) {
+        const c = Math.cos(a), s = Math.sin(a);
+        paths.push([[sx - c * size, sy - s * size], [sx + c * size, sy + s * size]]);
+      }
+    } else {
+      // Bright star — full 4-line asterisk (cross + both diagonals).
+      paths.push([[sx - size, sy], [sx + size, sy]]);
+      paths.push([[sx, sy - size], [sx, sy + size]]);
+      const d = size * 0.7;
+      paths.push([[sx - d, sy - d], [sx + d, sy + d]]);
+      paths.push([[sx - d, sy + d], [sx + d, sy - d]]);
+    }
+  }
+  return paths;
+}
+
+// Constellation sky — Poisson-scattered stars with thin lines connecting
+// some nearby pairs, forming a constellation pattern. Lines refuse to
+// cross blob silhouettes so the constellations don't slice through the
+// foreground subject.
+function generateSkyConstellation(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const rng = makeRng(state.seed + ':constellation');
+  const minDist = 0.06;
+  const pad = 0.04;
+  const candidates = poissonScatter(rng, minDist, {
+    xMin: SX_MIN + pad, xMax: SX_MAX - pad,
+    yMin: syHorizon + pad, yMax: SY_MAX - pad
+  }, 18);
+  // Keep only candidates that fall on actual sky pixels (not occluded
+  // by a blob in front).
+  const stars = [];
+  for (const [sx, sy] of candidates) {
+    const idx = bufIdx(buf, sx, sy);
+    if (idx < 0 || buf.surface[idx] === 0) stars.push([sx, sy]);
+  }
+  // Draw the stars themselves as small plus marks.
+  for (const [sx, sy] of stars) {
+    const size = 0.007 + rng() * 0.005;
+    paths.push([[sx - size, sy], [sx + size, sy]]);
+    paths.push([[sx, sy - size], [sx, sy + size]]);
+  }
+  // Connect a sparse subset of nearby pairs. Each star caps at maxConn
+  // connections so the network reads as constellations, not a graph.
+  const connectDist = 0.20;
+  const maxConn = 2;
+  const linkProb = 0.45;
+  const used = new Array(stars.length).fill(0);
+  for (let i = 0; i < stars.length; i++) {
+    if (used[i] >= maxConn) continue;
+    for (let j = i + 1; j < stars.length; j++) {
+      if (used[j] >= maxConn) continue;
+      const dx = stars[j][0] - stars[i][0];
+      const dy = stars[j][1] - stars[i][1];
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > connectDist || d < 0.03) continue;
+      if (rng() > linkProb) continue;
+      // Reject the line if it crosses a non-sky pixel (blob in front).
+      const segs = 10;
+      let blocked = false;
+      for (let k = 1; k < segs; k++) {
+        const t = k / segs;
+        const cx = stars[i][0] + dx * t;
+        const cy = stars[i][1] + dy * t;
+        const idx = bufIdx(buf, cx, cy);
+        if (idx >= 0 && buf.surface[idx] !== 0) { blocked = true; break; }
+      }
+      if (blocked) continue;
+      paths.push([stars[i].slice(), stars[j].slice()]);
+      used[i]++; used[j]++;
+      if (used[i] >= maxConn) break;
+    }
+  }
+  return paths;
+}
+
+// Vertical-scan sky — parallel vertical scan lines covering the sky
+// region. Replicates the URH #437 background: uniform vertical hatch
+// that strongly contrasts with horizontal-line foregrounds. Stroke
+// density follows the global lw × density spacing.
+function generateSkyVertical(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const spacing = Math.max(0.003, state.lw * state.density * WORLD_PER_MM * 1.1);
+  const sampleStep = Math.max(0.0015, spacing * 0.25);
+  for (let sx = SX_MIN; sx <= SX_MAX; sx += spacing) {
+    let inDraw = false;
+    let sy0 = 0, lastY = 0;
+    for (let sy = syHorizon; sy <= SY_MAX; sy += sampleStep) {
+      const idx = bufIdx(buf, sx, sy);
+      const isSky = (idx >= 0 && buf.surface[idx] === 0);
+      if (isSky) {
+        if (!inDraw) { sy0 = sy; inDraw = true; }
+        lastY = sy;
+      } else if (inDraw) {
+        if (Math.abs(lastY - sy0) > spacing * 0.4) {
+          paths.push([[sx, sy0], [sx, lastY]]);
+        }
+        inDraw = false;
+      }
+    }
+    if (inDraw && Math.abs(lastY - sy0) > spacing * 0.4) {
+      paths.push([[sx, sy0], [sx, lastY]]);
+    }
+  }
+  return paths;
+}
+
+// Rain sky — many short slanted dashes scattered uniformly across the
+// sky region, all at the same angle. Reads as falling rain / steep
+// drizzle. Distinct from the existing sky-style options because most
+// of them are horizontal (gradient, wobbly, bands) or radial (arcs,
+// stars) — this is the only one with a consistent diagonal motion.
+function generateSkyRain(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const rng = makeRng(state.seed + ':rain');
+  const angleDeg = 78;
+  const a = angleDeg * Math.PI / 180;
+  const dx = Math.cos(a), dy = Math.sin(a);
+  // Density scales with line spacing so denser hatching gives denser rain.
+  const targetCount = Math.round(8000 * (0.30 / state.lw));
+  for (let i = 0; i < targetCount; i++) {
+    const sx = SX_MIN + rng() * (SX_MAX - SX_MIN);
+    const sy = syHorizon + 0.005 + rng() * (SY_MAX - syHorizon - 0.005);
+    const idx = bufIdx(buf, sx, sy);
+    if (idx < 0 || buf.surface[idx] !== 0) continue;
+    const len = 0.018 + rng() * 0.020;
+    paths.push([
+      [sx - dx * len * 0.5, sy + dy * len * 0.5],
+      [sx + dx * len * 0.5, sy - dy * len * 0.5]
+    ]);
+  }
+  return paths;
+}
+
+function generateSkyHatches(state, buf) {
+  const paths = [];
+  const ang = Math.PI / 4;
+  const ca = Math.cos(ang), sa = Math.sin(ang);
+
+  // Slightly sparser than blob hatches so the sky reads as background.
+  const spacingWorld = state.lw * state.density * WORLD_PER_MM * 1.3;
+  const sampleStep = Math.max(0.0015, spacingWorld * 0.22);
+  const cycleLen = spacingWorld * 1.4;
+  const RANGE = 1.85;
+
+  // syHorizon is set by setupCamera() at render time.
+  const maxSky = SY_MAX - syHorizon;
+  if (maxSky < 0.05) return paths;
+
+  // Optional waviness — displace each sample perpendicular to the scan
+  // direction. When waviness=0, behaves exactly as before (straight 2-pt
+  // segments). When waviness>0, we accumulate polylines.
+  const wobN2 = state.waviness > 0 ? makeNoise2D(state.seed + ':gradWobble') : null;
+  const wobAmp = spacingWorld * 0.2 * state.waviness;
+
+  for (let s = -RANGE; s <= RANGE; s += spacingWorld) {
+    const sx0 = -sa * s;
+    const sy0 = ca * s;
+    let inDraw = false;
+    let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+    let polyline = [];
+    function flush() {
+      if (wobN2) {
+        if (polyline.length >= 2) paths.push(polyline);
+        polyline = [];
+      } else if (inDraw &&
+                 Math.hypot(lastX - dx0, lastY - dy0) > spacingWorld * 0.3) {
+        paths.push([[dx0, dy0], [lastX, lastY]]);
+      }
+      inDraw = false;
+    }
+
+    for (let t = -RANGE; t <= RANGE; t += sampleStep) {
+      let sx = sx0 + ca * t;
+      let sy = sy0 + sa * t;
+      if (wobN2) {
+        const w = (wobN2(sx * 3, sy * 3) - 0.5) * wobAmp;
+        sx += -sa * w;       // perpendicular to scan direction
+        sy +=  ca * w;
+      }
+      let draw = false;
+      if (sx >= SX_MIN && sx <= SX_MAX && sy >= SY_MIN && sy <= SY_MAX
+          && sy > syHorizon) {
+        const idx = bufIdx(buf, sx, sy);
+        if (idx >= 0 && buf.surface[idx] === 0) {
+          // Inverted from the previous attempt: solid at the TOP, fades
+          // down toward the horizon. `above` = 1 at top of page, 0 at horizon.
+          const above = (sy - syHorizon) / maxSky;
+          const onFrac = above * above;          // squared falloff
+          const cyc = (t / cycleLen) - Math.floor(t / cycleLen);
+          draw = cyc < onFrac;
+        }
+      }
+      if (draw) {
+        if (wobN2) {
+          polyline.push([sx, sy]);
+        } else {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
+        }
+        inDraw = true;
+      } else {
+        flush();
+      }
+    }
+    flush();
+  }
+  return paths;
+}
+
+// ============================================================
+// Shared 2-D smoothstep value-noise factory used by the sky textures.
+// ============================================================
+function makeNoise2D(seedKey) {
+  const rng = makeRng(seedKey);
+  const GS = 64;
+  const grid = new Float32Array(GS * GS);
+  for (let i = 0; i < grid.length; i++) grid[i] = rng();
+  return function n2(x, y) {
+    const ux = ((x % GS) + GS) % GS;
+    const uy = ((y % GS) + GS) % GS;
+    const ix = Math.floor(ux), iy = Math.floor(uy);
+    const fx = ux - ix,        fy = uy - iy;
+    const sxF = fx * fx * (3 - 2 * fx);
+    const syF = fy * fy * (3 - 2 * fy);
+    const a = grid[(ix % GS) + (iy % GS) * GS];
+    const b = grid[((ix + 1) % GS) + (iy % GS) * GS];
+    const c = grid[(ix % GS) + ((iy + 1) % GS) * GS];
+    const d = grid[((ix + 1) % GS) + ((iy + 1) % GS) * GS];
+    const ab = a + (b - a) * sxF;
+    const cd = c + (d - c) * sxF;
+    return ab + (cd - ab) * syF;
+  };
+}
+
+// ============================================================
+// Multi-angle gradient — the dashed-fade gradient layered at two angles.
+// (Helper supports waviness — non-zero waviness switches output to polylines
+// with perpendicular noise displacement.)
+// ============================================================
+function _skyGradientAtAngle(state, buf, ang) {
+  const paths = [];
+  const ca = Math.cos(ang), sa = Math.sin(ang);
+  const spacingWorld = state.lw * state.density * WORLD_PER_MM * 1.6;
+  const sampleStep = Math.max(0.0015, spacingWorld * 0.22);
+  const cycleLen = spacingWorld * 1.4;
+  const RANGE = 1.85;
+  const maxSky = SY_MAX - syHorizon;
+  if (maxSky < 0.05) return paths;
+  const wobN2 = state.waviness > 0 ? makeNoise2D(state.seed + ':mgWobble' + ang) : null;
+  const wobAmp = spacingWorld * 0.2 * state.waviness;
+
+  for (let s = -RANGE; s <= RANGE; s += spacingWorld) {
+    const sx0 = -sa * s;
+    const sy0 = ca * s;
+    let inDraw = false;
+    let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+    let polyline = [];
+    function flush() {
+      if (wobN2) {
+        if (polyline.length >= 2) paths.push(polyline);
+        polyline = [];
+      } else if (inDraw &&
+                 Math.hypot(lastX - dx0, lastY - dy0) > spacingWorld * 0.3) {
+        paths.push([[dx0, dy0], [lastX, lastY]]);
+      }
+      inDraw = false;
+    }
+    for (let t = -RANGE; t <= RANGE; t += sampleStep) {
+      let sx = sx0 + ca * t;
+      let sy = sy0 + sa * t;
+      if (wobN2) {
+        const w = (wobN2(sx * 3, sy * 3) - 0.5) * wobAmp;
+        sx += -sa * w;
+        sy +=  ca * w;
+      }
+      let draw = false;
+      if (sx >= SX_MIN && sx <= SX_MAX && sy >= SY_MIN && sy <= SY_MAX
+          && sy > syHorizon) {
+        const idx = bufIdx(buf, sx, sy);
+        if (idx >= 0 && buf.surface[idx] === 0) {
+          const above = (sy - syHorizon) / maxSky;
+          const onFrac = above * above;
+          const cyc = (t / cycleLen) - Math.floor(t / cycleLen);
+          draw = cyc < onFrac;
+        }
+      }
+      if (draw) {
+        if (wobN2) polyline.push([sx, sy]);
+        else {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
+        }
+        inDraw = true;
+      } else {
+        flush();
+      }
+    }
+    flush();
+  }
+  return paths;
+}
+function generateSkyMultiGradient(state, buf) {
+  return _skyGradientAtAngle(state, buf, Math.PI / 4)
+    .concat(_skyGradientAtAngle(state, buf, 3 * Math.PI / 4));
+}
+
+// ============================================================
+// Paper grain — horizontal dashed lines, density modulated by 2-D noise,
+// optional vertical wobble via waviness.
+// ============================================================
+function generateSkyPaperGrain(state, buf) {
+  const paths = [];
+  const spacing = state.lw * state.density * WORLD_PER_MM * 1.4;
+  const sampleStep = 0.003;
+  const cycleLen = spacing * 2.0;
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const n2 = makeNoise2D(state.seed + ':paperGrain');
+  const wobN2 = state.waviness > 0 ? makeNoise2D(state.seed + ':paperWobble') : null;
+  const wobAmp = spacing * 0.3 * state.waviness;
+  for (let baseSy = syHorizon + 0.01; baseSy <= SY_MAX; baseSy += spacing) {
+    let inDraw = false;
+    let dx0 = 0, dy0 = 0, lastX = 0, lastY = 0;
+    let polyline = [];
+    function flush() {
+      if (wobN2) {
+        if (polyline.length >= 2) paths.push(polyline);
+        polyline = [];
+      } else if (inDraw && Math.hypot(lastX - dx0, lastY - dy0) > 0.005) {
+        paths.push([[dx0, dy0], [lastX, lastY]]);
+      }
+      inDraw = false;
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      const sy = wobN2 ? baseSy + (wobN2(sx * 4, baseSy * 6) - 0.5) * wobAmp : baseSy;
+      const idx = bufIdx(buf, sx, sy);
+      const isSky = (idx >= 0 && buf.surface[idx] === 0);
+      const density = 0.3 + 0.6 * n2(sx * 2.2, sy * 1.8);
+      const cyc = (sx / cycleLen) - Math.floor(sx / cycleLen);
+      const draw = isSky && cyc < density;
+      if (draw) {
+        if (wobN2) polyline.push([sx, sy]);
+        else {
+          if (!inDraw) { dx0 = sx; dy0 = sy; inDraw = true; }
+          lastX = sx; lastY = sy;
+        }
+        inDraw = true;
+      } else flush();
+    }
+    flush();
+  }
+  return paths;
+}
+
+// ============================================================
+// Concentric arcs — arc segments around a focal point above the page.
+// Waviness perturbs each arc's radius along its sweep.
+// ============================================================
+function generateSkyArcs(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const focal = [0.0, SY_MAX + 0.3];
+  const spacing = state.lw * state.density * WORLD_PER_MM * 1.8;
+  const minR = 0.25, maxR = 2.8;
+  const angStep = 0.012;
+  const wobN2 = state.waviness > 0 ? makeNoise2D(state.seed + ':arcWobble') : null;
+  const wobAmp = spacing * 0.4 * state.waviness;
+  for (let r = minR; r <= maxR; r += spacing) {
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let theta = 0; theta <= 2 * Math.PI; theta += angStep) {
+      let rr = r;
+      if (wobN2) rr += (wobN2(r * 7, theta * 2.5) - 0.5) * wobAmp;
+      const sx = focal[0] + rr * Math.cos(theta);
+      const sy = focal[1] + rr * Math.sin(theta);
+      if (sx < SX_MIN || sx > SX_MAX || sy < syHorizon || sy > SY_MAX) {
+        flush(); continue;
+      }
+      const idx = bufIdx(buf, sx, sy);
+      if (idx >= 0 && buf.surface[idx] === 0) polyline.push([sx, sy]);
+      else flush();
+    }
+    flush();
+  }
+  return paths;
+}
+
+// ============================================================
+// Sky cellular automata: classic Conway B3/S23 seeded at 30% density,
+// stepped a few generations, then alive cells rendered as short
+// horizontal dashes. Port of the cellular-automata-as-texture idea from
+// VectorFriend's Genuary/cellularautomata. Distinct from the noise-based
+// sky styles — produces clusters of dashes rather than uniform speckle.
+// ============================================================
+function generateSkyCellular(state, buf) {
+  const paths = [];
+  if (SY_MAX - syHorizon < 0.05) return paths;
+  const cellsX = 80;
+  const cellSize = (SX_MAX - SX_MIN) / cellsX;
+  const skyTop = SY_MAX;
+  const skyBot = Math.max(syHorizon, SY_MIN);
+  const skyHeight = skyTop - skyBot;
+  const cellsY = Math.max(2, Math.round(skyHeight / cellSize));
+  const rng = makeRng(state.seed + ':cellularSky');
+  // Initialise with ~30 % alive cells.
+  let grid = new Uint8Array(cellsX * cellsY);
+  for (let i = 0; i < grid.length; i++) grid[i] = rng() < 0.30 ? 1 : 0;
+  // Step Conway's B3/S23 for a few generations so clusters stabilise.
+  const NUM_ITER = 4;
+  for (let iter = 0; iter < NUM_ITER; iter++) {
+    const next = new Uint8Array(cellsX * cellsY);
+    for (let y = 0; y < cellsY; y++) {
+      for (let x = 0; x < cellsX; x++) {
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = (x + dx + cellsX) % cellsX;
+            const ny = y + dy;
+            if (ny < 0 || ny >= cellsY) continue;
+            n += grid[ny * cellsX + nx];
+          }
+        }
+        const alive = grid[y * cellsX + x];
+        const survives = alive && (n === 2 || n === 3);
+        const born = !alive && (n === 3);
+        next[y * cellsX + x] = (survives || born) ? 1 : 0;
+      }
+    }
+    grid = next;
+  }
+  // Render alive cells as short horizontal dashes in the sky region.
+  const dashLen = cellSize * 0.75;
+  for (let y = 0; y < cellsY; y++) {
+    for (let x = 0; x < cellsX; x++) {
+      if (!grid[y * cellsX + x]) continue;
+      const cx = SX_MIN + (x + 0.5) * cellSize;
+      const cy = skyTop - (y + 0.5) * cellSize;
+      if (cy <= syHorizon) continue;
+      const idx = bufIdx(buf, cx, cy);
+      if (idx < 0 || buf.surface[idx] !== 0) continue;
+      paths.push([
+        [cx - dashLen / 2, cy],
+        [cx + dashLen / 2, cy]
+      ]);
+    }
+  }
+  return paths;
+}
+
+
+// ============================================================
+// Wobbly clouds — slight horizontal wobble + irregular missing segments.
+// Two independent 1-D noises per row: one tiny displacement for the wobble,
+// one separate noise thresholded at 0.5 for the dash mask. Smoothed value
+// noise naturally makes the dash on/off runs variable length, so the
+// "missing segments" look organic rather than periodic.
+// ============================================================
+function generateCloudsWobbly(state, buf) {
+  const paths = [];
+  const topThirdStart = SY_MAX - (SY_MAX - SY_MIN) / 3;
+  if (topThirdStart <= syHorizon) return paths;
+
+  const spacing = state.lw * state.density * WORLD_PER_MM * 1.5;
+  const sampleStep = 0.004;
+
+  const noiseRng = makeRng(state.seed + ':wobbly');
+  const grid = new Float32Array(256);
+  for (let i = 0; i < grid.length; i++) grid[i] = noiseRng();
+  function n1(t) {
+    const u = ((t % 256) + 256) % 256;
+    const i = Math.floor(u);
+    const f = u - i;
+    const a = grid[i % 256];
+    const b = grid[(i + 1) % 256];
+    const s = f * f * (3 - 2 * f);
+    return a + (b - a) * s;
+  }
+
+  // Slight wobble — at default waviness=3 this is ~0.6× the line spacing.
+  const wobbleAmp = spacing * 0.2 * state.waviness;
+
+  for (let sy = topThirdStart; sy <= SY_MAX; sy += spacing) {
+    const wobblePhase = sy * 13.7;
+    const dashPhase = sy * 31.5;          // unrelated to wobble — independent runs
+
+    let polyline = [];
+    function flush() {
+      if (polyline.length >= 2) paths.push(polyline);
+      polyline = [];
+    }
+    for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+      const wobble = (n1(sx * 5 + wobblePhase) - 0.5) * wobbleAmp;
+      const wavy = sy + wobble;
+      // Smoothstep noise crossing 0.5 → variable-length on/off runs.
+      const drawHere = n1(sx * 2.5 + dashPhase) > 0.5;
+      if (wavy < topThirdStart || wavy > SY_MAX) { flush(); continue; }
+      const idx = bufIdx(buf, sx, wavy);
+      const isSky = (idx >= 0 && buf.surface[idx] === 0);
+      if (drawHere && isSky) {
+        polyline.push([sx, wavy]);
+      } else {
+        flush();
+      }
+    }
+    flush();
+  }
+  return paths;
+}
+
+// ============================================================
+// Horizon line, broken where the blob occludes it
+// ============================================================
+function addHorizonLine(paths, buf) {
+  const HY = syHorizon;
+  if (HY < SY_MIN + 0.02 || HY > SY_MAX - 0.02) return;
+  const sampleStep = 0.0025;
+  let inDraw = false, x0 = 0, lastX = 0;
+  for (let sx = SX_MIN; sx <= SX_MAX; sx += sampleStep) {
+    const i = bufIdx(buf, sx, HY);
+    const occluded = (i >= 0 && buf.surface[i] === 1);
+    if (!occluded) {
+      if (!inDraw) { x0 = sx; inDraw = true; }
+      lastX = sx;
+    } else if (inDraw) {
+      paths.push([[x0, HY], [lastX, HY]]);
+      inDraw = false;
+    }
+  }
+  if (inDraw) paths.push([[x0, HY], [lastX, HY]]);
+}
+
+// ============================================================
+// Pen-up travel optimization
+// ============================================================
+function optimizePaths(paths) {
+  const n = paths.length;
+  if (n === 0) return paths;
+  const used = new Uint8Array(n);
+  const out = [];
+  let cx = -1, cy = 1.25;
+  for (let count = 0; count < n; count++) {
+    let best = -1, bestD = Infinity, bestRev = false;
+    for (let i = 0; i < n; i++) {
+      if (used[i]) continue;
+      const p = paths[i];
+      const a = p[0], b = p[p.length - 1];
+      const dA = (a[0] - cx) * (a[0] - cx) + (a[1] - cy) * (a[1] - cy);
+      const dB = (b[0] - cx) * (b[0] - cx) + (b[1] - cy) * (b[1] - cy);
+      if (dA < bestD) { bestD = dA; best = i; bestRev = false; }
+      if (dB < bestD) { bestD = dB; best = i; bestRev = true; }
+    }
+    used[best] = 1;
+    const p = paths[best];
+    const ordered = bestRev ? p.slice().reverse() : p;
+    out.push(ordered);
+    cx = ordered[ordered.length - 1][0];
+    cy = ordered[ordered.length - 1][1];
+  }
+  return out;
+}
+
+// ============================================================
+// Hershey Sans (subset) — single-stroke vector font for plotter-friendly
+// text overlay. Extracted from HersheySansMed.svg in the WeddingPen repo.
+// Glyph coords are in font space (cap-height 500, y-positive-up).
+// ============================================================
+const HERSHEY_GLYPHS = {" ":{"a":378,"d":""},"#":{"a":662,"d":"M 441 788 L 220 -220 M 630 788 L 410 -220 M 220 378 L 662 378 M 189 189 L 630 189"},"&":{"a":788,"d":"M 756 410 L 724 378 L 756 346 L 788 378 L 788 410 L 756 441 L 724 441 L 693 410 L 662 346 L 598 189 L 536 94.5 L 472 31.5 L 410 0 L 315 0 L 220 31.5 L 189 94.5 L 189 189 L 220 252 L 410 378 L 472 441 L 504 504 L 504 567 L 472 630 L 410 662 L 346 630 L 315 567 L 315 504 L 346 410 L 410 315 L 567 94.5 L 630 31.5 L 724 0 L 756 0 L 788 31.5 L 788 63 M 315 0 L 252 31.5 L 220 94.5 L 220 189 L 252 252 L 315 315 M 315 504 L 346 441 L 598 94.5 L 662 31.5 L 724 0"},",":{"a":346,"d":"M 315 31.5 L 284 0 L 252 0 L 220 31.5 L 220 63 L 252 94.5 L 284 94.5 L 315 63 L 315 -31.5 L 284 -94.5 L 220 -126 M 252 63 L 252 31.5 L 284 31.5 L 284 63 L 252 63 M 284 0 L 315 -31.5 M 315 31.5 L 284 -94.5"},"-":{"a":819,"d":"M 220 284 L 788 284"},".":{"a":346,"d":"M 252 94.5 L 220 63 L 220 31.5 L 252 0 L 284 0 L 315 31.5 L 315 63 L 284 94.5 L 252 94.5 M 252 63 L 252 31.5 L 284 31.5 L 284 63 L 252 63"},"/":{"a":724,"d":"M 724 788 L 158 -220 L 189 -220 M 724 788 L 756 788 L 189 -220"},"0":{"a":630,"d":"M 378 662 L 284 630 L 220 536 L 189 378 L 189 284 L 220 126 L 284 31.5 L 378 0 L 441 0 L 536 31.5 L 598 126 L 630 284 L 630 378 L 598 536 L 536 630 L 441 662 L 378 662 M 315 630 L 252 536 L 220 378 L 220 284 L 252 126 L 315 31.5 M 284 63 L 378 31.5 L 441 31.5 L 536 63 M 504 31.5 L 567 126 L 598 284 L 598 378 L 567 536 L 504 630 M 536 598 L 441 630 L 378 630 L 284 598"},"1":{"a":630,"d":"M 284 536 L 346 567 L 441 662 L 441 0 M 284 536 L 284 504 L 346 536 L 410 598 L 410 0 L 441 0"},"2":{"a":630,"d":"M 220 504 L 220 536 L 252 598 L 284 630 L 346 662 L 472 662 L 536 630 L 567 598 L 598 536 L 598 472 L 567 410 L 504 315 L 220 0 M 220 504 L 252 504 L 252 536 L 284 598 L 346 630 L 472 630 L 536 598 L 567 536 L 567 472 L 536 410 L 472 315 L 189 0 M 220 31.5 L 630 31.5 L 630 0 M 189 0 L 630 0"},"3":{"a":630,"d":"M 252 662 L 598 662 L 378 378 M 252 662 L 252 630 L 567 630 M 567 662 L 346 378 M 378 410 L 441 410 L 536 378 L 598 315 L 630 220 L 630 189 L 598 94.5 L 536 31.5 L 441 0 L 346 0 L 252 31.5 L 220 63 L 189 126 L 220 126 M 346 378 L 441 378 L 536 346 L 598 252 M 472 378 L 567 315 L 598 220 L 598 189 L 567 94.5 L 472 31.5 M 598 158 L 536 63 L 441 31.5 L 346 31.5 L 252 63 L 220 126 M 315 31.5 L 220 94.5"},"4":{"a":630,"d":"M 504 567 L 504 0 L 536 0 M 536 662 L 536 0 M 536 662 L 189 158 L 662 158 M 504 567 L 220 158 M 220 189 L 662 189 L 662 158"},"5":{"a":630,"d":"M 252 662 L 220 378 M 284 630 L 252 410 M 252 662 L 567 662 L 567 630 M 284 630 L 567 630 M 252 410 L 346 441 L 441 441 L 536 410 L 598 346 L 630 252 L 630 189 L 598 94.5 L 536 31.5 L 441 0 L 346 0 L 252 31.5 L 220 63 L 189 126 L 220 126 M 220 378 L 252 378 L 315 410 L 441 410 L 536 378 L 598 284 M 472 410 L 567 346 L 598 252 L 598 189 L 567 94.5 L 472 31.5 M 598 158 L 536 63 L 441 31.5 L 346 31.5 L 252 63 L 220 126 M 315 31.5 L 220 94.5"},"6":{"a":630,"d":"M 536 630 L 567 567 L 598 567 L 567 630 L 472 662 L 410 662 L 315 630 L 252 536 L 220 378 L 220 220 L 252 94.5 L 315 31.5 L 410 0 L 441 0 L 536 31.5 L 598 94.5 L 630 189 L 630 220 L 598 315 L 536 378 L 441 410 L 410 410 L 315 378 L 252 315 M 567 598 L 472 630 L 410 630 L 315 598 M 346 630 L 284 536 L 252 378 L 252 220 L 284 94.5 L 378 31.5 M 252 158 L 315 63 L 410 31.5 L 441 31.5 L 536 63 L 598 158 M 472 31.5 L 567 94.5 L 598 189 L 598 220 L 567 315 L 472 378 M 598 252 L 536 346 L 441 378 L 410 378 L 315 346 L 252 252 M 378 378 L 284 315 L 252 220"},"7":{"a":630,"d":"M 189 662 L 630 662 L 315 0 M 189 662 L 189 630 L 598 630 M 598 662 L 284 0 L 315 0"},"8":{"a":630,"d":"M 346 662 L 252 630 L 220 567 L 220 504 L 252 441 L 284 410 L 346 378 L 472 346 L 536 315 L 567 284 L 598 220 L 598 126 L 567 63 L 472 31.5 L 346 31.5 L 252 63 L 220 126 L 220 220 L 252 284 L 284 315 L 346 346 L 472 378 L 536 410 L 567 441 L 598 504 L 598 567 L 567 630 L 472 662 L 346 662 M 284 630 L 252 567 L 252 504 L 284 441 L 346 410 L 472 378 L 536 346 L 598 284 L 630 220 L 630 126 L 598 63 L 567 31.5 L 472 0 L 346 0 L 252 31.5 L 220 63 L 189 126 L 189 220 L 220 284 L 284 346 L 346 378 L 472 410 L 536 441 L 567 504 L 567 567 L 536 630 M 567 598 L 472 630 L 346 630 L 252 598 M 220 94.5 L 315 31.5 M 504 31.5 L 598 94.5"},"9":{"a":630,"d":"M 567 346 L 504 284 L 410 252 L 378 252 L 284 284 L 220 346 L 189 441 L 189 472 L 220 567 L 284 630 L 378 662 L 410 662 L 504 630 L 567 567 L 598 441 L 598 284 L 567 126 L 504 31.5 L 410 0 L 346 0 L 252 31.5 L 220 94.5 L 252 94.5 L 284 31.5 M 567 441 L 536 346 L 441 284 M 567 410 L 504 315 L 410 284 L 378 284 L 284 315 L 220 410 M 346 284 L 252 346 L 220 441 L 220 472 L 252 567 L 346 630 M 220 504 L 284 598 L 378 630 L 410 630 L 504 598 L 567 504 M 441 630 L 536 567 L 567 441 L 567 284 L 536 126 L 472 31.5 M 504 63 L 410 31.5 L 346 31.5 L 252 63"},":":{"a":346,"d":"M 252 441 L 220 410 L 220 378 L 252 346 L 284 346 L 315 378 L 315 410 L 284 441 L 252 441 M 252 410 L 252 378 L 284 378 L 284 410 L 252 410 M 252 94.5 L 220 63 L 220 31.5 L 252 0 L 284 0 L 315 31.5 L 315 63 L 284 94.5 L 252 94.5 M 252 63 L 252 31.5 L 284 31.5 L 284 63 L 252 63"},"A":{"a":630,"d":"M 410 662 L 158 0 M 410 567 L 189 0 L 158 0 M 410 567 L 630 0 L 662 0 M 410 662 L 662 0 M 252 189 L 567 189 M 220 158 L 598 158"},"B":{"a":630,"d":"M 220 662 L 220 0 M 252 630 L 252 31.5 M 220 662 L 472 662 L 567 630 L 598 598 L 630 536 L 630 441 L 598 378 L 567 346 L 472 315 M 252 630 L 472 630 L 567 598 L 598 536 L 598 441 L 567 378 L 472 346 M 252 346 L 472 346 L 567 315 L 598 284 L 630 220 L 630 126 L 598 63 L 567 31.5 L 472 0 L 220 0 M 252 315 L 472 315 L 567 284 L 598 220 L 598 126 L 567 63 L 472 31.5 L 252 31.5"},"C":{"a":662,"d":"M 662 504 L 630 567 L 567 630 L 504 662 L 378 662 L 315 630 L 252 567 L 220 504 L 189 410 L 189 252 L 220 158 L 252 94.5 L 315 31.5 L 378 0 L 504 0 L 567 31.5 L 630 94.5 L 662 158 M 662 504 L 630 504 L 598 567 L 567 598 L 504 630 L 378 630 L 315 598 L 252 504 L 220 410 L 220 252 L 252 158 L 315 63 L 378 31.5 L 504 31.5 L 567 63 L 598 94.5 L 630 158 L 662 158"},"D":{"a":662,"d":"M 220 662 L 220 0 M 252 630 L 252 31.5 M 220 662 L 441 662 L 536 630 L 598 567 L 630 504 L 662 410 L 662 252 L 630 158 L 598 94.5 L 536 31.5 L 441 0 L 220 0 M 252 630 L 441 630 L 536 598 L 567 567 L 598 504 L 630 410 L 630 252 L 598 158 L 567 94.5 L 536 63 L 441 31.5 L 252 31.5"},"E":{"a":598,"d":"M 220 662 L 220 0 M 252 630 L 252 31.5 M 220 662 L 598 662 M 252 630 L 598 630 L 598 662 M 252 346 L 441 346 L 441 315 M 252 315 L 441 315 M 252 31.5 L 598 31.5 L 598 0 M 220 0 L 598 0"},"F":{"a":567,"d":"M 220 662 L 220 0 M 252 630 L 252 0 L 220 0 M 220 662 L 598 662 M 252 630 L 598 630 L 598 662 M 252 346 L 441 346 L 441 315 M 252 315 L 441 315"},"G":{"a":662,"d":"M 662 504 L 630 567 L 567 630 L 504 662 L 378 662 L 315 630 L 252 567 L 220 504 L 189 410 L 189 252 L 220 158 L 252 94.5 L 315 31.5 L 378 0 L 504 0 L 567 31.5 L 630 94.5 L 662 158 L 662 284 L 504 284 M 662 504 L 630 504 L 598 567 L 567 598 L 504 630 L 378 630 L 315 598 L 284 567 L 252 504 L 220 410 L 220 252 L 252 158 L 284 94.5 L 315 63 L 378 31.5 L 504 31.5 L 567 63 L 598 94.5 L 630 158 L 630 252 L 504 252 L 504 284"},"H":{"a":693,"d":"M 220 662 L 220 0 M 220 662 L 252 662 L 252 0 L 220 0 M 662 662 L 630 662 L 630 0 L 662 0 M 662 662 L 662 0 M 252 346 L 630 346 M 252 315 L 630 315"},"I":{"a":284,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0"},"J":{"a":536,"d":"M 472 662 L 472 158 L 441 63 L 378 31.5 L 315 31.5 L 252 63 L 220 158 L 189 158 M 472 662 L 504 662 L 504 158 L 472 63 L 441 31.5 L 378 0 L 315 0 L 252 31.5 L 220 63 L 189 158"},"K":{"a":662,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0 M 662 662 L 630 662 L 252 284 M 662 662 L 252 252 M 346 378 L 630 0 L 662 0 M 378 378 L 662 0"},"L":{"a":536,"d":"M 220 662 L 220 0 M 220 662 L 252 662 L 252 31.5 M 252 31.5 L 598 31.5 L 598 0 M 220 0 L 598 0"},"M":{"a":756,"d":"M 220 662 L 220 0 M 252 504 L 252 0 L 220 0 M 252 504 L 472 0 M 220 662 L 472 94.5 M 724 662 L 472 94.5 M 693 504 L 472 0 M 693 504 L 693 0 L 724 0 M 724 662 L 724 0"},"N":{"a":693,"d":"M 220 662 L 220 0 M 252 567 L 252 0 L 220 0 M 252 567 L 662 0 M 220 662 L 630 94.5 M 630 662 L 630 94.5 M 630 662 L 662 662 L 662 0"},"O":{"a":693,"d":"M 378 662 L 315 630 L 252 567 L 220 504 L 189 410 L 189 252 L 220 158 L 252 94.5 L 315 31.5 L 378 0 L 504 0 L 567 31.5 L 630 94.5 L 662 158 L 693 252 L 693 410 L 662 504 L 630 567 L 567 630 L 504 662 L 378 662 M 410 630 L 315 598 L 252 504 L 220 410 L 220 252 L 252 158 L 315 63 L 410 31.5 L 472 31.5 L 567 63 L 630 158 L 662 252 L 662 410 L 630 504 L 567 598 L 472 630 L 410 630"},"P":{"a":630,"d":"M 220 662 L 220 0 M 252 630 L 252 0 L 220 0 M 220 662 L 504 662 L 567 630 L 598 598 L 630 536 L 630 441 L 598 378 L 567 346 L 504 315 L 252 315 M 252 630 L 504 630 L 567 598 L 598 536 L 598 441 L 567 378 L 504 346 L 252 346"},"Q":{"a":693,"d":"M 378 662 L 315 630 L 252 567 L 220 504 L 189 410 L 189 252 L 220 158 L 252 94.5 L 315 31.5 L 378 0 L 504 0 L 567 31.5 L 630 94.5 L 662 158 L 693 252 L 693 410 L 662 504 L 630 567 L 567 630 L 504 662 L 378 662 M 410 630 L 315 598 L 252 504 L 220 410 L 220 252 L 252 158 L 315 63 L 410 31.5 L 472 31.5 L 567 63 L 630 158 L 662 252 L 662 410 L 630 504 L 567 598 L 472 630 L 410 630 M 472 94.5 L 630 -63 L 662 -63 M 472 94.5 L 504 94.5 L 662 -63"},"R":{"a":630,"d":"M 220 662 L 220 0 M 252 630 L 252 0 L 220 0 M 220 662 L 472 662 L 567 630 L 598 598 L 630 536 L 630 441 L 598 378 L 567 346 L 472 315 L 252 315 M 252 630 L 472 630 L 567 598 L 598 536 L 598 441 L 567 378 L 472 346 L 252 346 M 410 315 L 598 0 L 630 0 M 441 315 L 630 0"},"S":{"a":630,"d":"M 630 567 L 567 630 L 472 662 L 346 662 L 252 630 L 189 567 L 189 504 L 220 441 L 252 410 L 315 378 L 472 315 L 536 284 L 567 252 L 598 189 L 598 94.5 L 567 63 L 472 31.5 L 346 31.5 L 284 63 L 252 94.5 L 189 94.5 M 630 567 L 567 567 L 536 598 L 472 630 L 346 630 L 252 598 L 220 567 L 220 504 L 252 441 L 315 410 L 472 346 L 536 315 L 598 252 L 630 189 L 630 94.5 L 567 31.5 L 472 0 L 346 0 L 252 31.5 L 189 94.5"},"T":{"a":536,"d":"M 346 630 L 346 0 M 378 630 L 378 0 L 346 0 M 158 662 L 567 662 L 567 630 M 158 662 L 158 630 L 567 630"},"U":{"a":693,"d":"M 220 662 L 220 189 L 252 94.5 L 315 31.5 L 410 0 L 472 0 L 567 31.5 L 630 94.5 L 662 189 L 662 662 M 220 662 L 252 662 L 252 189 L 284 94.5 L 315 63 L 410 31.5 L 472 31.5 L 567 63 L 598 94.5 L 630 189 L 630 662 L 662 662"},"V":{"a":630,"d":"M 158 662 L 410 0 M 158 662 L 189 662 L 410 94.5 M 662 662 L 630 662 L 410 94.5 M 662 662 L 410 0"},"W":{"a":819,"d":"M 158 662 L 346 0 M 158 662 L 189 662 L 346 94.5 M 504 662 L 346 94.5 M 504 567 L 346 0 M 504 567 L 662 0 M 504 662 L 662 94.5 M 850 662 L 819 662 L 662 94.5 M 850 662 L 662 0"},"X":{"a":630,"d":"M 189 662 L 598 0 L 630 0 M 189 662 L 220 662 L 630 0 M 630 662 L 598 662 L 189 0 M 630 662 L 220 0 L 189 0"},"Y":{"a":598,"d":"M 158 662 L 378 346 L 378 0 L 410 0 M 158 662 L 189 662 L 410 346 M 630 662 L 598 662 L 378 346 M 630 662 L 410 346 L 410 0"},"Z":{"a":630,"d":"M 598 662 L 189 0 M 630 662 L 220 0 M 189 662 L 630 662 M 189 662 L 189 630 L 598 630 M 220 31.5 L 630 31.5 L 630 0 M 189 0 L 630 0"},"a":{"a":630,"d":"M 567 441 L 567 0 L 598 0 M 567 441 L 598 441 L 598 0 M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 567 94.5"},"b":{"a":630,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0 M 252 346 L 315 410 L 378 441 L 472 441 L 536 410 L 598 346 L 630 252 L 630 189 L 598 94.5 L 536 31.5 L 472 0 L 378 0 L 315 31.5 L 252 94.5 M 252 346 L 378 410 L 472 410 L 536 378 L 567 346 L 598 252 L 598 189 L 567 94.5 L 536 63 L 472 31.5 L 378 31.5 L 252 94.5"},"c":{"a":567,"d":"M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 536 315 L 504 378 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 504 63 L 536 126 L 567 94.5"},"d":{"a":630,"d":"M 567 662 L 567 0 L 598 0 M 567 662 L 598 662 L 598 0 M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 567 94.5"},"e":{"a":567,"d":"M 220 220 L 567 220 L 567 315 L 536 378 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 220 252 L 536 252 L 536 315 L 504 378 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 504 63 L 536 126 L 567 94.5"},"f":{"a":441,"d":"M 441 662 L 378 662 L 315 630 L 284 536 L 284 0 L 315 0 M 441 662 L 441 630 L 378 630 L 315 598 M 346 630 L 315 536 L 315 0 M 189 441 L 410 441 L 410 410 M 189 441 L 189 410 L 410 410"},"g":{"a":630,"d":"M 598 441 L 567 441 L 567 -31.5 L 536 -126 L 504 -158 L 441 -189 L 378 -189 L 315 -158 L 284 -126 L 220 -126 M 598 441 L 598 -31.5 L 567 -126 L 504 -189 L 441 -220 L 346 -220 L 284 -189 L 220 -126 M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 567 94.5"},"h":{"a":630,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0 M 252 315 L 346 410 L 410 441 L 504 441 L 567 410 L 598 315 L 598 0 M 252 315 L 346 378 L 410 410 L 472 410 L 536 378 L 567 315 L 567 0 L 598 0"},"i":{"a":284,"d":"M 220 662 L 189 630 L 189 598 L 220 567 L 252 567 L 284 598 L 284 630 L 252 662 L 220 662 M 220 630 L 220 598 L 252 598 L 252 630 L 220 630 M 220 441 L 220 0 L 252 0 M 220 441 L 252 441 L 252 0"},"j":{"a":284,"d":"M 220 662 L 189 630 L 189 598 L 220 567 L 252 567 L 284 598 L 284 630 L 252 662 L 220 662 M 220 630 L 220 598 L 252 598 L 252 630 L 220 630 M 220 441 L 220 -220 L 252 -220 M 220 441 L 252 441 L 252 -220"},"k":{"a":598,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0 M 598 441 L 567 441 L 252 126 M 598 441 L 252 94.5 M 346 220 L 536 0 L 598 0 M 378 252 L 598 0"},"l":{"a":284,"d":"M 220 662 L 220 0 L 252 0 M 220 662 L 252 662 L 252 0"},"m":{"a":976,"d":"M 220 441 L 220 0 L 252 0 M 220 441 L 252 441 L 252 0 M 252 315 L 346 410 L 410 441 L 504 441 L 567 410 L 598 315 L 598 0 M 252 315 L 346 378 L 410 410 L 472 410 L 536 378 L 567 315 L 567 0 L 598 0 M 598 315 L 693 410 L 756 441 L 850 441 L 914 410 L 945 315 L 945 0 M 598 315 L 693 378 L 756 410 L 819 410 L 882 378 L 914 315 L 914 0 L 945 0"},"n":{"a":630,"d":"M 220 441 L 220 0 L 252 0 M 220 441 L 252 441 L 252 0 M 252 315 L 346 410 L 410 441 L 504 441 L 567 410 L 598 315 L 598 0 M 252 315 L 346 378 L 410 410 L 472 410 L 536 378 L 567 315 L 567 0 L 598 0"},"o":{"a":598,"d":"M 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 L 598 189 L 598 252 L 567 346 L 504 410 L 441 441 L 346 441 M 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 504 63 L 536 94.5 L 567 189 L 567 252 L 536 346 L 504 378 L 441 410 L 346 410"},"p":{"a":630,"d":"M 220 441 L 220 -220 L 252 -220 M 220 441 L 252 441 L 252 -220 M 252 346 L 315 410 L 378 441 L 472 441 L 536 410 L 598 346 L 630 252 L 630 189 L 598 94.5 L 536 31.5 L 472 0 L 378 0 L 315 31.5 L 252 94.5 M 252 346 L 378 410 L 472 410 L 536 378 L 567 346 L 598 252 L 598 189 L 567 94.5 L 536 63 L 472 31.5 L 378 31.5 L 252 94.5"},"q":{"a":630,"d":"M 567 441 L 567 -220 L 598 -220 M 567 441 L 598 441 L 598 -220 M 567 346 L 504 410 L 441 441 L 346 441 L 284 410 L 220 346 L 189 252 L 189 189 L 220 94.5 L 284 31.5 L 346 0 L 441 0 L 504 31.5 L 567 94.5 M 567 346 L 441 410 L 346 410 L 284 378 L 252 346 L 220 252 L 220 189 L 252 94.5 L 284 63 L 346 31.5 L 441 31.5 L 567 94.5"},"r":{"a":441,"d":"M 220 441 L 220 0 L 252 0 M 220 441 L 252 441 L 252 0 M 252 252 L 284 346 L 346 410 L 410 441 L 504 441 M 252 252 L 284 315 L 346 378 L 410 410 L 504 410 L 504 441"},"s":{"a":536,"d":"M 536 346 L 504 410 L 410 441 L 315 441 L 220 410 L 189 346 L 220 284 L 284 252 L 441 189 L 504 158 M 472 189 L 504 126 L 504 94.5 L 472 31.5 M 504 63 L 410 31.5 L 315 31.5 L 220 63 M 252 31.5 L 220 94.5 L 189 94.5 M 536 346 L 504 346 L 472 410 M 504 378 L 410 410 L 315 410 L 220 378 M 252 410 L 220 346 L 252 284 M 220 315 L 284 284 L 441 220 L 504 189 L 536 126 L 536 94.5 L 504 31.5 L 410 0 L 315 0 L 220 31.5 L 189 94.5"},"t":{"a":346,"d":"M 252 662 L 252 0 L 284 0 M 252 662 L 284 662 L 284 0 M 158 441 L 378 441 L 378 410 M 158 441 L 158 410 L 378 410"},"u":{"a":630,"d":"M 220 441 L 220 126 L 252 31.5 L 315 0 L 410 0 L 472 31.5 L 567 126 M 220 441 L 252 441 L 252 126 L 284 63 L 346 31.5 L 410 31.5 L 472 63 L 567 126 M 567 441 L 567 0 L 598 0 M 567 441 L 598 441 L 598 0"},"v":{"a":504,"d":"M 158 441 L 346 0 M 158 441 L 189 441 L 346 63 M 536 441 L 504 441 L 346 63 M 536 441 L 346 0"},"w":{"a":756,"d":"M 189 441 L 346 0 M 189 441 L 220 441 L 346 94.5 M 472 441 L 346 94.5 M 472 346 L 346 0 M 472 346 L 598 0 M 472 441 L 598 94.5 M 756 441 L 724 441 L 598 94.5 M 756 441 L 598 0"},"x":{"a":567,"d":"M 189 441 L 536 0 L 567 0 M 189 441 L 220 441 L 567 0 M 567 441 L 536 441 L 189 0 M 567 441 L 220 0 L 189 0"},"y":{"a":504,"d":"M 158 441 L 346 0 M 158 441 L 189 441 L 346 63 M 536 441 L 504 441 L 346 63 L 220 -220 M 536 441 L 346 0 L 252 -220 L 220 -220"},"z":{"a":567,"d":"M 504 410 L 189 0 M 567 441 L 252 31.5 M 189 441 L 567 441 M 189 441 L 189 410 L 504 410 M 252 31.5 L 567 31.5 L 567 0 M 189 0 L 567 0"}};
+
+function parseGlyphPath(d) {
+  if (!d) return [];
+  const polylines = [];
+  let current = [];
+  const tokens = d.split(/\s+/);
+  for (let i = 0; i < tokens.length; ) {
+    const t = tokens[i++];
+    if (t === 'M' || t === 'L') {
+      const x = parseFloat(tokens[i++]);
+      const y = parseFloat(tokens[i++]);
+      if (t === 'M') {
+        if (current.length >= 2) polylines.push(current);
+        current = [[x, y]];
+      } else {
+        current.push([x, y]);
+      }
+    }
+  }
+  if (current.length >= 2) polylines.push(current);
+  return polylines;
+}
+
+function measureText(text, scale) {
+  let w = 0;
+  for (const ch of text) {
+    const g = HERSHEY_GLYPHS[ch];
+    w += (g ? g.a : 400) * scale;
+  }
+  return w;
+}
+
+// Returns polylines in viewBox coords. `vbX,vbY` is the baseline-left anchor;
+// font y-positive-up is flipped to SVG y-positive-down by subtraction.
+function renderTextStrokes(text, vbX, vbY, scale) {
+  const out = [];
+  let cursor = vbX;
+  for (const ch of text) {
+    const g = HERSHEY_GLYPHS[ch];
+    if (!g) { cursor += 400 * scale; continue; }
+    if (g.d) {
+      for (const poly of parseGlyphPath(g.d)) {
+        out.push(poly.map(([gx, gy]) => [cursor + gx * scale, vbY - gy * scale]));
+      }
+    }
+    cursor += g.a * scale;
+  }
+  return out;
+}
+
+// ============================================================
+// SVG output
+// ============================================================
+function sxToVB(sx) {
+  return MARGIN_VB + (sx - SX_MIN) / (SX_MAX - SX_MIN) * (VB_W - 2 * MARGIN_VB);
+}
+function syToVB(sy) {
+  return MARGIN_VB + (SY_MAX - sy) / (SY_MAX - SY_MIN) * (VB_H - 2 * MARGIN_VB);
+}
+function buildPathD(paths, vbPaths) {
+  let d = '';
+  for (const p of paths) {
+    if (p.length < 2) continue;
+    d += 'M' + sxToVB(p[0][0]).toFixed(2) + ',' + syToVB(p[0][1]).toFixed(2);
+    for (let i = 1; i < p.length; i++) {
+      d += 'L' + sxToVB(p[i][0]).toFixed(2) + ',' + syToVB(p[i][1]).toFixed(2);
+    }
+  }
+  if (vbPaths) {
+    // Already in viewBox coordinates — no sx/syToVB transform.
+    for (const p of vbPaths) {
+      if (p.length < 2) continue;
+      d += 'M' + p[0][0].toFixed(2) + ',' + p[0][1].toFixed(2);
+      for (let i = 1; i < p.length; i++) {
+        d += 'L' + p[i][0].toFixed(2) + ',' + p[i][1].toFixed(2);
+      }
+    }
+  }
+  return d;
+}
+
+// Builds the bottom-margin text polylines (already in viewBox coords).
+function buildBottomLabel(state, strokeCount) {
+  const text = 'monument  /  ' + strokeCount + ' strokes  /  bre pettis';
+  const baselineY = VB_H - 18;               // 18 vb above page bottom
+  // Pick a scale that keeps the label inside the printable width even
+  // when the strokeCount runs to 5 digits.
+  const maxWidth = VB_W - 2 * MARGIN_VB;
+  let scale = 0.032;                         // ~16 vb cap-height (preferred)
+  let w = measureText(text, scale);
+  if (w > maxWidth) scale *= maxWidth / w;
+  w = measureText(text, scale);
+  const startX = (VB_W - w) / 2;
+  return renderTextStrokes(text, startX, baselineY, scale);
+}
+function lwToStrokeVB(lwMM) { return lwMM * (300 / 25.4); }
+
+// ============================================================
+// State + UI glue
+// ============================================================
+function getInputValue(id, fallback) {
+  const el = document.getElementById(id);
+  return el ? el.value : fallback;
+}
+function readState() {
+  return {
+    seed: document.getElementById('seed').value || '0',
+    scene: 'single',
+    // Scene params (rendered dynamically by renderSceneUi into sceneParamsPanel).
+    nSpheres:    clampInt  (getInputValue('nSpheres',    10),  8,    12,  10),
+    spread:      clampFloat(getInputValue('spread',      1.5), 1.0,  2.5, 1.5),
+    verticality: clampFloat(getInputValue('verticality', 1.7), 1.5,  1.9, 1.7),
+    pointiness:  0,                                  // hardcoded
+    smoothK:     clampFloat(getInputValue('smoothK',     0.4), 0.3,  0.5, 0.4),
+    // Camera / hatching / lighting / tone — all hardcoded for the public build.
+    camTilt:      6,                                 // hardcoded
+    hatchStyle:   'scan',                            // hardcoded
+    skyStyle:     document.getElementById('skyStyle').value,
+    groundStyle:  document.getElementById('groundStyle').value,
+    waviness:     3.0,                               // sky waviness (used by gradient/wobbly/multiGradient/paperGrain/arcs)
+    sandWaviness: 0.75,                              // ground sand-garden waviness (decoupled from sky)
+    rippleFreq:   10,                                // sand-garden ripple frequency
+    paperSize:    '4x5',                             // hardcoded
+    lw:           0.3,                               // hardcoded
+    density:      2.5,                               // hardcoded
+    bufRes:       400,                               // hardcoded
+    lx:           -0.6,                              // hardcoded light direction
+    ly:           0.8,
+    lz:           -0.4,
+    brightness:   0,                                 // hardcoded tone
+    contrast:     1,
+    gamma:        1,
+    posterLevels: 1
+  };
+}
+function clampInt(v, lo, hi, fb) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fb;
+}
+function clampFloat(v, lo, hi, fb) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fb;
+}
+function setStatus(msg) { document.getElementById('stats').textContent = msg; }
+function tick() { return new Promise(r => setTimeout(r, 0)); }
+
+// Render the dynamic "Scene parameters" panel for the given scene. Hides
+// the section entirely if the scene has no UI schema.
+function renderSceneUi(sceneName) {
+  const panel = document.getElementById('sceneParamsPanel');
+  const header = document.getElementById('sceneParamsHeader');
+  const scene = SCENES[sceneName];
+  if (!scene || typeof scene === 'function' || !scene.ui) {
+    panel.innerHTML = '';
+    header.style.display = 'none';
+    return;
+  }
+  header.style.display = '';
+  let html = '';
+  for (const c of scene.ui) {
+    if (c.type === 'enum') {
+      let opts = '';
+      for (const o of c.options) {
+        const val = (typeof o === 'object') ? o.value : o;
+        const lab = (typeof o === 'object') ? o.label : o;
+        opts += '<option value="' + val + '"' +
+                (val === c.default ? ' selected' : '') + '>' + lab + '</option>';
+      }
+      html += '<div class="field"><label>' + c.label + '</label>' +
+              '<select id="' + c.id + '"' +
+              ' style="width:78px;padding:3px 5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:3px;font:inherit">' +
+              opts + '</select></div>';
+    } else {
+      const step = c.step != null ? c.step : (c.type === 'int' ? 1 : 0.1);
+      html += '<div class="field"><label>' + c.label + '</label>' +
+              '<input id="' + c.id + '" type="number"' +
+              ' min="' + c.min + '" max="' + c.max +
+              '" step="' + step + '" value="' + c.default + '"></div>';
+    }
+  }
+  panel.innerHTML = html;
+  // Inputs created dynamically don't carry the Enter-key listener wired
+  // up at startup, so attach one now.
+  panel.querySelectorAll('input, select').forEach(el => {
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
+  });
+}
+
+// Read current values from the per-scene UI inputs, validated against
+// the schema's min/max/default. Returns null if the scene has no UI.
+function readSceneParams(sceneName) {
+  const scene = SCENES[sceneName];
+  if (!scene || typeof scene === 'function' || !scene.ui) return null;
+  const out = {};
+  for (const c of scene.ui) {
+    const el = document.getElementById(c.id);
+    if (!el) { out[c.id] = c.default; continue; }
+    if (c.type === 'enum') {
+      out[c.id] = el.value;
+    } else if (c.type === 'int') {
+      out[c.id] = clampInt(el.value, c.min, c.max, c.default);
+    } else {
+      out[c.id] = clampFloat(el.value, c.min, c.max, c.default);
+    }
+  }
+  return out;
+}
+
+// Single source of truth for which global state keys get serialised into
+// the permalink. Both syncFromUrl and writeUrl iterate this — they used
+// to maintain parallel lists that drifted.
+const URL_KEYS = [
+  'seed','nSpheres','spread','verticality','smoothK','skyStyle','groundStyle'
+];
+
+function syncFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  for (const k of URL_KEYS) {
+    const el = document.getElementById(k);
+    if (el && params.has(k)) el.value = params.get(k);
+  }
+  // Single-scene public build — copy any matching scene-UI params from URL.
+  const scene = SCENES.single;
+  if (scene && scene.ui && Array.isArray(scene.ui)) {
+    for (const c of scene.ui) {
+      const el = document.getElementById(c.id);
+      if (el && params.has(c.id)) el.value = params.get(c.id);
+    }
+  }
+}
+function writeUrl(state) {
+  const params = new URLSearchParams();
+  for (const k of URL_KEYS) {
+    if (state[k] != null) params.set(k, state[k]);
+  }
+  // Per-scene params: walk the active scene's UI schema and write any
+  // current input values. These match `syncFromUrl`'s read so links can
+  // round-trip scene-specific controls (rockScale, etc.).
+  const scene = SCENES[state.scene];
+  if (scene && scene.ui && Array.isArray(scene.ui)) {
+    for (const c of scene.ui) {
+      const el = document.getElementById(c.id);
+      if (el && el.value !== '') params.set(c.id, el.value);
+    }
+  }
+  const url = window.location.pathname + '?' + params.toString();
+  window.history.replaceState({}, '', url);
+  const link = document.getElementById('permalink');
+  link.href = url;
+  link.textContent = '?' + params.toString();
+}
+
+let lastRender = null;
+
+// =============================================================================
+// Style registries. Each entry is { label, fn(state, buf, sdf?) -> paths[] }.
+// The render dispatcher looks up the active style here; option lists in the
+// <select> elements should match the keys (asserted at startup, see below).
+// =============================================================================
+const HATCH_STYLES = {
+  scan:       { label: 'Scan (4-angle)',     fn: (s, b) => generateHatches(s, b) },
+  crosshatch: { label: 'Crosshatch (H + V)', fn: (s, b) => generateCrosshatchHatches(s, b) },
+  vertical:   { label: 'Vertical only',      fn: (s, b) => generateVerticalHatches(s, b) },
+  cell:       { label: 'Cell halftone',      fn: (s, b) => generateCellHatches(s, b) },
+  monet:      { label: 'Monet brushstrokes', fn: (s, b) => generateMonetHatches(s, b) },
+  tsp:        { label: 'TSP infill',         fn: (s, b) => generateTspHatches(s, b) },
+  isoDepth:   { label: 'Iso-depth contours', fn: (s, b) => generateCurveHatches(s, b, fieldIsoDepth) },
+  projNormal: { label: 'Projected normal',   fn: (s, b) => generateCurveHatches(s, b, fieldProjNormal) },
+  principal:  { label: 'Principal curvature',fn: (s, b) => generateCurveHatches(s, b, fieldPrincipal) }
+};
+
+const GROUND_STYLES = {
+  perspective: { label: 'Perspective',  fn: (s, b)       => generateGroundHatches(s, b) },
+  waves:       { label: 'Waves',        fn: (s, b)       => generateGroundWaves(s, b) },
+  sandGarden:  { label: 'Sand garden',  fn: (s, b, sdf)  => generateGroundSandGarden(s, b, sdf) }
+};
+
+const SKY_STYLES = {
+  gradient:     { label: 'Gradient',           fn: (s, b) => generateSkyHatches(s, b) },
+  wobbly:       { label: 'Wobbly lines',       fn: (s, b) => generateCloudsWobbly(s, b) },
+  multiGradient:{ label: 'Box gradient',       fn: (s, b) => generateSkyMultiGradient(s, b) },
+  paperGrain:   { label: 'Paper grain',        fn: (s, b) => generateSkyPaperGrain(s, b) },
+  arcs:         { label: 'Concentric arcs',    fn: (s, b) => generateSkyArcs(s, b) },
+  stars:        { label: 'Stars',              fn: (s, b) => generateStarSky(s, b) },
+  cellular:     { label: 'Cellular automata',  fn: (s, b) => generateSkyCellular(s, b) },
+  constellation:{ label: 'Constellation',      fn: (s, b) => generateSkyConstellation(s, b) },
+  rain:         { label: 'Rain',               fn: (s, b) => generateSkyRain(s, b) },
+  vertical:     { label: 'Vertical scan',      fn: (s, b) => generateSkyVertical(s, b) },
+  none:         { label: 'None (empty sky)',   fn: ()     => [] }
+};
+
+// Sanity-check: every <option> in a style dropdown must have a registry entry.
+// Fires at script-load; surfaces the dropdown↔registry drift bug we hit twice.
+function assertDropdownRegistryParity() {
+  const checks = [
+    ['hatchStyle',  HATCH_STYLES],
+    ['groundStyle', GROUND_STYLES],
+    ['skyStyle',    SKY_STYLES]
+  ];
+  for (const [selId, registry] of checks) {
+    const sel = document.getElementById(selId);
+    if (!sel) continue;
+    for (const opt of sel.options) {
+      if (!(opt.value in registry)) {
+        console.error('Dropdown "' + selId + '" has option "' + opt.value +
+                      '" with no matching registry entry');
+      }
+    }
+  }
+}
+
+// A sensible default state object — every key the renderer reads. The
+// gallery page calls this for a baseline and applies its overrides on top.
+function defaultState() {
+  return {
+    seed: 'gallery', scene: 'single',
+    nSpheres: 4, spread: 1.0, verticality: 1.4, pointiness: 0, smoothK: 0.3,
+    camTilt: 6,
+    hatchStyle: 'scan', skyStyle: 'gradient', groundStyle: 'perspective',
+    waviness: 3.0, rippleFreq: 7.0,
+    paperSize: '4x5',
+    lw: 0.3, density: 2.5, bufRes: 400,
+    lx: -0.6, ly: 0.8, lz: -0.4,
+    brightness: 0, contrast: 1, gamma: 1, posterLevels: 1
+  };
+}
+
+// Synchronous render: state in → SVG markup string out. No DOM reads,
+// no UI updates. The interactive doRender below uses this and then
+// updates the page; the gallery page calls it directly with arbitrary
+// state objects.
+//
+// Pass scene-specific params either inline on `state` (matching the
+// scene's ui ids) OR via `state.sceneParams = { ... }`. If neither is
+// supplied, the scene's UI defaults are used.
+function renderToSvgString(state) {
+  // Apply the requested paper size before any of the SX/SY/VB math runs.
+  const paper = PAPER_SIZES[state.paperSize] || PAPER_SIZES['4x5'];
+  setPaperSize(paper.w, paper.h);
+  const rng = makeRng(state.seed);
+  const sceneEntry = SCENES.single;
+  let sceneResult;
+  {
+    // Resolve scene params: explicit state.sceneParams > flat state keys
+    // (for back-compat with the existing single-scene URL params) >
+    // schema defaults.
+    const params = {};
+    for (const c of sceneEntry.ui) {
+      if (state.sceneParams && state.sceneParams[c.id] != null) {
+        params[c.id] = state.sceneParams[c.id];
+      } else if (state[c.id] != null) {
+        params[c.id] = state[c.id];
+      } else {
+        params[c.id] = c.default;
+      }
+    }
+    sceneResult = sceneEntry.build(rng, state, params);
+  }
+  let sdf, sceneCamera = null, sceneMaterialFn = null, sceneBeamMask = null;
+  if (typeof sceneResult === 'function') {
+    sdf = sceneResult;
+  } else {
+    sdf = sceneResult.sdf;
+    sceneCamera = sceneResult.camera || null;
+    sceneMaterialFn = sceneResult.materialFn || null;
+    sceneBeamMask = sceneResult.beamMask || null;
+  }
+  setupCamera(sceneCamera || { tiltDeg: state.camTilt });
+
+  const buf = renderSceneBuffer(state, sdf, sceneMaterialFn);
+  if (sceneBeamMask) applyBeamMask(buf, sceneBeamMask);
+  applyToneMap(buf, state);
+
+  const hatchEntry  = HATCH_STYLES[state.hatchStyle]   || HATCH_STYLES.scan;
+  const groundEntry = GROUND_STYLES[state.groundStyle] || GROUND_STYLES.perspective;
+  const skyEntry    = SKY_STYLES[state.skyStyle]       || SKY_STYLES.gradient;
+  const blob = hatchEntry.fn(state, buf);
+  const groundLines = groundEntry.fn(state, buf, sdf);
+  const groundShadow = generateGroundShadows(state, buf, sdf);
+  const ground = groundLines.concat(groundShadow);
+  const sky = skyEntry.fn(state, buf);
+  const rawPaths = blob.concat(ground).concat(sky);
+  addHorizonLine(rawPaths, buf);
+  const paths = optimizePaths(rawPaths);
+
+  let extraVB = [];
+  if (sceneResult && sceneResult.extraStrokes) {
+    const ctx = {
+      worldToScreen,
+      worldToVB: function (P) {
+        const s = worldToScreen(P);
+        return s ? [sxToVB(s[0]), syToVB(s[1])] : null;
+      },
+      sxToVB, syToVB, syHorizon: syHorizon
+    };
+    extraVB = sceneResult.extraStrokes(ctx, state) || [];
+  }
+  const labelPaths = buildBottomLabel(state, paths.length);
+  const d = buildPathD(paths, extraVB.concat(labelPaths));
+  const strokeVB = lwToStrokeVB(state.lw);
+  return {
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + VB_W + ' ' + VB_H + '">' +
+         '<rect width="' + VB_W + '" height="' + VB_H + '" fill="white"/>' +
+         '<path d="' + d + '" stroke="black" stroke-width="' + strokeVB.toFixed(3) +
+         '" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    paths: paths,
+    d: d,
+    strokeVB: strokeVB,
+    strokeCount: paths.length + extraVB.length,
+    // True if the scene supplied its own camera, in which case the
+    // global Cam tilt slider had no effect on this render.
+    sceneOwnsCamera: sceneCamera !== null
+  };
+}
+
+// Expose to test pages loading us via iframe.
+window.renderToSvgString = renderToSvgString;
+window.defaultState = defaultState;
+window.SCENES = SCENES;
+
+// postMessage bridge — the gallery page (or any parent) can drive the
+// renderer without needing direct property access. This works even when
+// the parent and iframe are 'cross-origin' under Chrome's strict file://
+// policy, where the direct path fails.
+//
+// Protocol:
+//   parent → iframe: { type: 'rayblob:render', requestId, state }
+//   iframe → parent: { type: 'rayblob:result', requestId,
+//                      svg, strokeCount }   or   { error }
+//
+//   parent → iframe: { type: 'rayblob:defaultState', requestId }
+//   iframe → parent: { type: 'rayblob:defaultStateResult', requestId,
+//                      state }
+//
+// On script-load the iframe posts 'rayblob:ready' to its parent so the
+// gallery can stop polling and start sending render requests.
+window.addEventListener('message', function (e) {
+  const data = e.data;
+  if (!data || typeof data !== 'object') return;
+  if (data.type === 'rayblob:render') {
+    try {
+      const result = renderToSvgString(data.state || {});
+      e.source.postMessage({
+        type: 'rayblob:result', requestId: data.requestId,
+        svg: result.svg, strokeCount: result.strokeCount
+      }, '*');
+    } catch (err) {
+      e.source.postMessage({
+        type: 'rayblob:result', requestId: data.requestId,
+        error: (err && err.message) || String(err)
+      }, '*');
+    }
+  } else if (data.type === 'rayblob:defaultState') {
+    e.source.postMessage({
+      type: 'rayblob:defaultStateResult', requestId: data.requestId,
+      state: defaultState()
+    }, '*');
+  } else if (data.type === 'rayblob:visibleScenes') {
+    // Reports the scene <select>'s current option values so the gallery
+    // can filter out hidden scenes without breaching same-origin
+    // restrictions on iframe.contentDocument access (file:// blocks it).
+    const sel = document.getElementById('scene');
+    const ids = sel ? Array.from(sel.options).map(function (o) { return o.value; }) : [];
+    e.source.postMessage({
+      type: 'rayblob:visibleScenesResult', requestId: data.requestId,
+      scenes: ids
+    }, '*');
+  }
+});
+// Announce readiness to the parent. The parent may not exist (when the
+// app is loaded directly) — postMessage to window.parent === window is
+// harmless.
+try {
+  window.parent.postMessage({ type: 'rayblob:ready' }, '*');
+} catch (e) { /* no parent */ }
+
+async function doRender() {
+  const btn = document.getElementById('render');
+  btn.disabled = true;
+  try {
+    const state = readState();
+    // Bundle current scene params into state.sceneParams so the renderer
+    // sees them even when called from outside this page.
+    state.sceneParams = readSceneParams(state.scene) || {};
+    writeUrl(state);
+
+    setStatus('Rendering…');
+    await tick();
+    const t0 = performance.now();
+    const result = renderToSvgString(state);
+    const t1 = performance.now();
+    const svg = document.getElementById('preview');
+    svg.setAttribute('viewBox', '0 0 ' + VB_W + ' ' + VB_H);
+    // Preview occupies a 480×600 box but keeps the paper's aspect ratio,
+    // so non-4:5 sizes (4:6, 5:7, 9:12) don't get stretched.
+    const aspect = H_IN / W_IN;
+    if (aspect >= 600 / 480) {
+      svg.style.height = '600px';
+      svg.style.width  = (600 / aspect) + 'px';
+    } else {
+      svg.style.width  = '480px';
+      svg.style.height = (480 * aspect) + 'px';
+    }
+    svg.innerHTML = result.svg.replace(/^<svg[^>]*>|<\/svg>$/g, '');
+    lastRender = { state, paths: result.paths, d: result.d, strokeVB: result.strokeVB };
+    setStatus(
+      result.strokeCount + ' strokes · ' + Math.round(t1 - t0) + 'ms\n' +
+      'lw=' + state.lw + 'mm  spacing=' + (state.lw * state.density).toFixed(2) + 'mm'
+    );
+  } catch (err) {
+    setStatus('Error: ' + err.message);
+    console.error(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function doSave() {
+  if (!lastRender) { setStatus('Nothing to save yet — render first.'); return; }
+  const { state, d, strokeVB } = lastRender;
+  const svgText =
+    '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<svg xmlns="http://www.w3.org/2000/svg" ' +
+    'width="' + W_IN + 'in" height="' + H_IN + 'in" ' +
+    'viewBox="0 0 ' + VB_W + ' ' + VB_H + '">\n' +
+    '  <path d="' + d + '" stroke="black" stroke-width="' + strokeVB.toFixed(3) +
+    '" fill="none" stroke-linecap="round" stroke-linejoin="round"/>\n' +
+    '</svg>\n';
+  const blob = new Blob([svgText], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'monument_seed-' + state.seed + '_lw-' + state.lw + '.svg';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function doRandomize() {
+  document.getElementById('seed').value = Math.floor(Math.random() * 1e9).toString(36);
+  doRender();
+}
+
+document.getElementById('render').addEventListener('click', doRender);
+document.getElementById('save').addEventListener('click', doSave);
+document.getElementById('randomize').addEventListener('click', doRandomize);
+document.querySelectorAll('.panel input').forEach(el => {
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') doRender(); });
+});
+
+// Single-scene public build — render the scene UI once at startup.
+renderSceneUi('single');
+assertDropdownRegistryParity();
+syncFromUrl();
+doRender();
+</script>
+</body>
+</html>
