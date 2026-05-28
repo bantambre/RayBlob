@@ -3396,13 +3396,13 @@ const GROUND_WEIGHTS = [
 
 // Sun presets. lx/ly/lz are the light direction (from surface toward
 // light source). All come from the left (lx negative), slight back-light
-// (lz negative). Elevation varies the y component.
-// Sunset was pulled — shadows go nearly vertical and there isn't enough
-// ground space on the page to actually read them as long shadows.
+// (lz negative). Elevation varies the y component, kept ≥ 40° so the
+// cast shadow always reads on-page (Sunset 15° and Afternoon 30° were
+// both pulled — shadows ran off the visible canvas).
 const SUN_PRESETS = [
   { name: 'High noon',   lx: -0.50, ly: 0.87, lz: -0.30, weight: 28 },
   { name: 'Midmorning',  lx: -0.71, ly: 0.71, lz: -0.30, weight: 44 },
-  { name: 'Afternoon',   lx: -0.85, ly: 0.50, lz: -0.25, weight: 28 }
+  { name: 'Afternoon',   lx: -0.77, ly: 0.64, lz: -0.22, weight: 28 }
 ];
 
 // Range definitions for the seed-picked blob params.
