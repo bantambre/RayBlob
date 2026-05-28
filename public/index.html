@@ -110,31 +110,17 @@ const MARGIN_VB = 60;
 const SX_MIN = -1, SX_MAX = 1;
 const SY_MIN = -1.25, SY_MAX = 1.25;
 
-// Paper dimensions — `let` so setPaperSize can change them. Width must
-// equal composition width; paper height ≥ composition height (extra
-// height goes below the composition).
-let W_IN  = 4, H_IN  = 6;
-let VB_W  = 1200, VB_H = 1800;
-let WORLD_PER_MM = 2.0 / (W_IN * 25.4);
+// Paper dimensions — fixed at 4×6 (4×5 composition + 1" below for
+// metadata). Width = composition width.
+const W_IN  = 4, H_IN  = 6;
+const VB_W  = 1200, VB_H = 1800;
+const WORLD_PER_MM = 2.0 / (W_IN * 25.4);
 
-// Paper-size registry — paper inches per id. Currently all share the 4"
-// composition width; only height varies. Adding a wider paper later
-// would require revisiting the composition-vs-paper width assumption.
+// Paper-size registry kept for compatibility with the rest of the
+// pipeline (callers look up `state.paperSize`). Only 4×6 is exposed.
 const PAPER_SIZES = {
-  '4x5':  { w: 4, h: 5  },
-  '4x6':  { w: 4, h: 6  },   // default — 4×5 composition + 1" below
-  '4x7':  { w: 4, h: 7  },
-  '4x8':  { w: 4, h: 8  }
+  '4x6':  { w: 4, h: 6  }
 };
-
-function setPaperSize(wIn, hIn) {
-  W_IN = wIn; H_IN = hIn;
-  VB_W = Math.round(wIn * 300);
-  VB_H = Math.round(hIn * 300);
-  WORLD_PER_MM = 2.0 / (wIn * 25.4);
-  // SY range stays anchored to the 4×5 composition — extra paper height
-  // is empty margin below, not extra ground.
-}
 
 // Camera position is fixed; the *direction* changes with `camTilt`, so the
 // horizon position on screen is configurable. These F/R/U vectors are
@@ -3150,6 +3136,44 @@ function buildBottomLabel(state, strokeCount) {
   const startX = (COMP_VB_W - w) / 2;
   return renderTextStrokes(text, startX, baselineY, scale);
 }
+
+// Builds the trait metadata block for the bottom 1-inch margin of the
+// 4×6 paper. Shows the seed plus the six traits that label each gallery
+// card (Sky / Ground / Sun / Blob density / Smoothness / Verticality)
+// in a single centred column below the artwork.
+function buildTraitsLabel(state) {
+  const out = [];
+  const traits = state.traits || {};
+  const lines = [
+    'seed:           ' + state.seed,
+    'sky:            ' + (traits.Sky || ''),
+    'ground:         ' + (traits.Ground || ''),
+    'sun:            ' + (traits.Sun || ''),
+    'blob density:   ' + (traits['Blob density'] || ''),
+    'smoothness:     ' + (traits.Smoothness || ''),
+    'verticality:    ' + (traits.Verticality || '')
+  ];
+  const scale = 0.022;                 // ~11 vb cap-height; line ~28 vb
+  const lineHeight = 32;
+  // Block sits in the bottom-margin band (between composition bottom
+  // at COMP_VB_H and the paper bottom at VB_H). Top-align the block
+  // 36 vb under the composition so there's air above it.
+  const blockTop = COMP_VB_H + 36;
+  // Each line is left-aligned with the widest line, then the whole
+  // block is centred horizontally on the page.
+  let widest = 0;
+  for (const line of lines) {
+    const w = measureText(line, scale);
+    if (w > widest) widest = w;
+  }
+  const startX = (VB_W - widest) / 2;
+  for (let i = 0; i < lines.length; i++) {
+    const baselineY = blockTop + (i + 1) * lineHeight;
+    const polys = renderTextStrokes(lines[i], startX, baselineY, scale);
+    for (const p of polys) out.push(p);
+  }
+  return out;
+}
 function lwToStrokeVB(lwMM) { return lwMM * (300 / 25.4); }
 
 // ============================================================
@@ -3544,9 +3568,8 @@ function deriveStateFromSeed(state) {
 // scene's ui ids) OR via `state.sceneParams = { ... }`. If neither is
 // supplied, the scene's UI defaults are used.
 function renderToSvgString(state) {
-  // Apply the requested paper size before any of the SX/SY/VB math runs.
-  const paper = PAPER_SIZES[state.paperSize] || PAPER_SIZES['4x6'];
-  setPaperSize(paper.w, paper.h);
+  // Paper is fixed at 4×6; PAPER_SIZES still exists for state.paperSize
+  // round-tripping but there's nothing to apply at render time.
   // Seed-driven derivation: fills in any 'auto' fields (sky/ground) from
   // weighted picks, and always sets sun-preset + scene params.
   deriveStateFromSeed(state);
@@ -3600,8 +3623,9 @@ function renderToSvgString(state) {
     };
     extraVB = sceneResult.extraStrokes(ctx, state) || [];
   }
-  const labelPaths = buildBottomLabel(state, paths.length);
-  const d = buildPathD(paths, extraVB.concat(labelPaths));
+  const labelPaths  = buildBottomLabel(state, paths.length);
+  const traitPaths  = buildTraitsLabel(state);
+  const d = buildPathD(paths, extraVB.concat(labelPaths).concat(traitPaths));
   const strokeVB = lwToStrokeVB(state.lw);
   return {
     svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + VB_W + ' ' + VB_H + '">' +
