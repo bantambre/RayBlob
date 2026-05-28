@@ -3410,7 +3410,7 @@ const SUN_PRESETS = [
 const BLOB_RANGES = {
   nSpheres:    { min: 8,    max: 12,  isInt: true },
   spread:      { min: 1.0,  max: 2.5 },
-  verticality: { min: 1.5,  max: 1.9 },
+  verticality: { min: 1.5,  max: 1.8 },
   smoothK:     { min: 0.30, max: 0.50 }
 };
 
@@ -3454,8 +3454,8 @@ function binSmoothness(k) {
 }
 function binVerticality(v) {
   if (v <= 1.6) return 'Squat';
-  if (v <= 1.75) return 'Standard';
-  return 'Tall';
+  if (v <= 1.7) return 'Standard';
+  return 'Tall';   // 1.7 < v ≤ 1.8
 }
 
 // Pretty labels for sky/ground trait display.
