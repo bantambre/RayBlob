@@ -174,7 +174,7 @@ async function run() {
 }
 
 function formatTraits(t) {
-  const order = ['Sky', 'Ground', 'Sun', 'Blob density', 'Smoothness', 'Verticality'];
+  const order = ['Sky', 'Ground', 'Lighting angle', 'Density', 'Smoothness', 'Verticality'];
   const lines = [];
   for (const k of order) {
     if (t[k] != null) lines.push(k + ': ' + t[k]);

@@ -3139,38 +3139,44 @@ function buildBottomLabel(state, strokeCount) {
 
 // Builds the trait metadata block for the bottom 1-inch margin of the
 // 4×6 paper. Shows the seed plus the six traits that label each gallery
-// card (Sky / Ground / Sun / Blob density / Smoothness / Verticality)
-// in a single centred column below the artwork.
+// card (Sky / Ground / Lighting angle / Density / Smoothness /
+// Verticality) as a two-column key:value table, with the keys right-
+// aligned so their colons line up vertically.
 function buildTraitsLabel(state) {
   const out = [];
   const traits = state.traits || {};
-  const lines = [
-    'seed:           ' + state.seed,
-    'sky:            ' + (traits.Sky || ''),
-    'ground:         ' + (traits.Ground || ''),
-    'sun:            ' + (traits.Sun || ''),
-    'blob density:   ' + (traits['Blob density'] || ''),
-    'smoothness:     ' + (traits.Smoothness || ''),
-    'verticality:    ' + (traits.Verticality || '')
+  const rows = [
+    ['seed:',           state.seed],
+    ['sky:',            traits.Sky || ''],
+    ['ground:',         traits.Ground || ''],
+    ['lighting angle:', traits['Lighting angle'] || ''],
+    ['density:',        traits.Density || ''],
+    ['smoothness:',     traits.Smoothness || ''],
+    ['verticality:',    traits.Verticality || '']
   ];
   const scale = 0.022;                 // ~11 vb cap-height; line ~28 vb
   const lineHeight = 32;
-  // Block sits in the bottom-margin band (between composition bottom
-  // at COMP_VB_H and the paper bottom at VB_H). Top-align the block
-  // 36 vb under the composition so there's air above it.
   const blockTop = COMP_VB_H + 36;
-  // Each line is left-aligned with the widest line, then the whole
-  // block is centred horizontally on the page.
-  let widest = 0;
-  for (const line of lines) {
-    const w = measureText(line, scale);
-    if (w > widest) widest = w;
+  // Pre-measure to lay out a centred 2-column table. Keys right-align
+  // so the colons share an x; values left-align in their own column.
+  let widestKey = 0, widestVal = 0;
+  for (const [k, v] of rows) {
+    const kw = measureText(k, scale);
+    const vw = measureText(v, scale);
+    if (kw > widestKey) widestKey = kw;
+    if (vw > widestVal) widestVal = vw;
   }
-  const startX = (VB_W - widest) / 2;
-  for (let i = 0; i < lines.length; i++) {
+  const gap = 14;                      // vb between key column and value column
+  const totalWidth = widestKey + gap + widestVal;
+  const blockX = (VB_W - totalWidth) / 2;
+  const keyRightX = blockX + widestKey;
+  const valX = keyRightX + gap;
+  for (let i = 0; i < rows.length; i++) {
+    const [k, v] = rows[i];
     const baselineY = blockTop + (i + 1) * lineHeight;
-    const polys = renderTextStrokes(lines[i], startX, baselineY, scale);
-    for (const p of polys) out.push(p);
+    const keyStartX = keyRightX - measureText(k, scale);
+    for (const p of renderTextStrokes(k, keyStartX, baselineY, scale)) out.push(p);
+    for (const p of renderTextStrokes(v, valX, baselineY, scale)) out.push(p);
   }
   return out;
 }
@@ -3550,8 +3556,8 @@ function deriveStateFromSeed(state) {
   state.traits = {
     Sky:          SKY_LABELS[state.skyStyle] || state.skyStyle,
     Ground:       GROUND_LABELS[state.groundStyle] || state.groundStyle,
-    Sun:          state.sunName,
-    'Blob density': binDensity(state.nSpheres) + ' (' + state.nSpheres + ')',
+    'Lighting angle': state.sunName,
+    Density:        binDensity(state.nSpheres) + ' (' + state.nSpheres + ')',
     Smoothness:   binSmoothness(state.smoothK),
     Verticality:  binVerticality(state.verticality)
   };
