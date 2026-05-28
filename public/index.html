@@ -3397,11 +3397,12 @@ const GROUND_WEIGHTS = [
 // Sun presets. lx/ly/lz are the light direction (from surface toward
 // light source). All come from the left (lx negative), slight back-light
 // (lz negative). Elevation varies the y component.
+// Sunset was pulled — shadows go nearly vertical and there isn't enough
+// ground space on the page to actually read them as long shadows.
 const SUN_PRESETS = [
-  { name: 'High noon',   lx: -0.50, ly: 0.87, lz: -0.30, weight: 25 },
-  { name: 'Midmorning',  lx: -0.71, ly: 0.71, lz: -0.30, weight: 40 },
-  { name: 'Afternoon',   lx: -0.85, ly: 0.50, lz: -0.25, weight: 25 },
-  { name: 'Sunset',      lx: -0.95, ly: 0.25, lz: -0.20, weight: 10 }
+  { name: 'High noon',   lx: -0.50, ly: 0.87, lz: -0.30, weight: 28 },
+  { name: 'Midmorning',  lx: -0.71, ly: 0.71, lz: -0.30, weight: 44 },
+  { name: 'Afternoon',   lx: -0.85, ly: 0.50, lz: -0.25, weight: 28 }
 ];
 
 // Range definitions for the seed-picked blob params.
@@ -3491,11 +3492,17 @@ function deriveStateFromSeed(state) {
   state.lx = sun.lx;
   state.ly = sun.ly;
   state.lz = sun.lz;
-  // Blob params — uniform random in their ranges.
+  // Blob params. Verticality and smoothK are uniform-random across their
+  // full ranges, but spread is constrained by the rolled verticality so
+  // wide-and-short combinations (which read as flat puddles, not
+  // monuments) can't happen. Empirically vert/spread under ~0.78 yields
+  // the "weird blob" failure mode; cap spread at verticality / 0.78.
   state.nSpheres    = pickRange(seedRng, BLOB_RANGES.nSpheres);
-  state.spread      = pickRange(seedRng, BLOB_RANGES.spread);
   state.verticality = pickRange(seedRng, BLOB_RANGES.verticality);
   state.smoothK     = pickRange(seedRng, BLOB_RANGES.smoothK);
+  const spreadMin = BLOB_RANGES.spread.min;
+  const spreadMax = Math.min(BLOB_RANGES.spread.max, state.verticality / 0.78);
+  state.spread     = spreadMin + seedRng() * (spreadMax - spreadMin);
 
   // Trait export. plotterfiles-gen infra will pick this up at mint time.
   state.traits = {
