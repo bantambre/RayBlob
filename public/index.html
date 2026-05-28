@@ -3406,10 +3406,13 @@ const SUN_PRESETS = [
   { name: 'Sunrise',     lx: -0.77, ly: 0.64, lz: -0.22, weight: 24 }
 ];
 
-// Range definitions for the seed-picked blob params.
+// Range definitions for the seed-picked blob params. Spread max was
+// tightened from 2.5 to 2.4 — at the top end the silhouette was
+// bleeding off the left/right edges (spread alone drives blob width;
+// the SDF doesn't divide x by V like it does y).
 const BLOB_RANGES = {
   nSpheres:    { min: 8,    max: 12,  isInt: true },
-  spread:      { min: 1.0,  max: 2.5 },
+  spread:      { min: 1.0,  max: 2.4 },
   verticality: { min: 1.5,  max: 1.8 },
   smoothK:     { min: 0.30, max: 0.50 }
 };
