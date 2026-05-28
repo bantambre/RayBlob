@@ -91,39 +91,49 @@
 // ============================================================
 // Constants & coordinate system
 // ============================================================
-// SVG output: paper size in inches, viewBox at 300 units/inch. The
-// concrete paper size is configurable via the UI; setPaperSize() below
-// is the single point that keeps all derived values consistent.
-let W_IN = 4, H_IN = 5;
-let VB_W = 1200, VB_H = 1500;
+// SVG output. The composition (sky / blob / ground) is always rendered
+// at the original 4×5 aspect; the paper can be taller. Extra paper
+// height beyond the composition is left as white margin below, with the
+// bottom-label sitting in that margin near the paper's bottom edge.
+//
+// Default: 4×6 paper = 4×5 composition + 1 inch below.
+
+// Composition area — fixed at 4×5, never changes.
+const COMP_W_IN  = 4;
+const COMP_H_IN  = 5;
+const COMP_VB_W  = COMP_W_IN * 300;   // 1200
+const COMP_VB_H  = COMP_H_IN * 300;   // 1500
+
 const MARGIN_VB = 60;
 
-// Screen-space coords. sx ∈ [-1, 1] regardless of paper, sy extends
-// proportionally so the aspect matches the paper (positive sy = UP).
+// Screen-space coords describe the COMPOSITION (not the paper). Fixed.
 const SX_MIN = -1, SX_MAX = 1;
-let SY_MIN = -1.25, SY_MAX = 1.25;
+const SY_MIN = -1.25, SY_MAX = 1.25;
 
-// Paper-size registry — string id → {w, h} in inches. Add a new entry
-// + an <option> in the paperSize <select> to expose another size.
+// Paper dimensions — `let` so setPaperSize can change them. Width must
+// equal composition width; paper height ≥ composition height (extra
+// height goes below the composition).
+let W_IN  = 4, H_IN  = 6;
+let VB_W  = 1200, VB_H = 1800;
+let WORLD_PER_MM = 2.0 / (W_IN * 25.4);
+
+// Paper-size registry — paper inches per id. Currently all share the 4"
+// composition width; only height varies. Adding a wider paper later
+// would require revisiting the composition-vs-paper width assumption.
 const PAPER_SIZES = {
   '4x5':  { w: 4, h: 5  },
-  '4x6':  { w: 4, h: 6  },
-  '5x7':  { w: 5, h: 7  },
-  '8x10': { w: 8, h: 10 },
-  '9x12': { w: 9, h: 12 }
+  '4x6':  { w: 4, h: 6  },   // default — 4×5 composition + 1" below
+  '4x7':  { w: 4, h: 7  },
+  '4x8':  { w: 4, h: 8  }
 };
 
-// Set the active paper size and recompute everything that derives from
-// it (viewBox, sy range, world-per-mm). Call before each render whenever
-// state.paperSize changes.
 function setPaperSize(wIn, hIn) {
   W_IN = wIn; H_IN = hIn;
-  VB_W = Math.round(wIn * 300); VB_H = Math.round(hIn * 300);
-  // SY range is centred at 0 and scales with paper aspect (SX range stays [-1, 1]).
-  const halfSY = hIn / wIn;
-  SY_MIN = -halfSY; SY_MAX = halfSY;
-  // 1 sx-unit spans wIn/2 inches; WORLD_PER_MM = 1 / (wIn/2 * 25.4) = 2 / (wIn * 25.4).
+  VB_W = Math.round(wIn * 300);
+  VB_H = Math.round(hIn * 300);
   WORLD_PER_MM = 2.0 / (wIn * 25.4);
+  // SY range stays anchored to the 4×5 composition — extra paper height
+  // is empty margin below, not extra ground.
 }
 
 // Camera position is fixed; the *direction* changes with `camTilt`, so the
@@ -226,9 +236,6 @@ function computeDarkness(buf, idx) {
   ));
 }
 
-// Width of one sx-unit in mm, derived from current paper width. Updated
-// by setPaperSize() — `let` so it tracks the active paper.
-let WORLD_PER_MM = 2.0 / (W_IN * 25.4);
 
 // ============================================================
 // PRNG
@@ -3094,11 +3101,15 @@ function renderTextStrokes(text, vbX, vbY, scale) {
 // ============================================================
 // SVG output
 // ============================================================
+// Screen → viewBox maps. Always uses the COMPOSITION viewbox dimensions
+// (not the paper's VB_W/VB_H), so the composition occupies the top-left
+// 4×5 rectangle of the paper and any extra paper height is empty space
+// below — never extends the rendered ground or sky.
 function sxToVB(sx) {
-  return MARGIN_VB + (sx - SX_MIN) / (SX_MAX - SX_MIN) * (VB_W - 2 * MARGIN_VB);
+  return MARGIN_VB + (sx - SX_MIN) / (SX_MAX - SX_MIN) * (COMP_VB_W - 2 * MARGIN_VB);
 }
 function syToVB(sy) {
-  return MARGIN_VB + (SY_MAX - sy) / (SY_MAX - SY_MIN) * (VB_H - 2 * MARGIN_VB);
+  return MARGIN_VB + (SY_MAX - sy) / (SY_MAX - SY_MIN) * (COMP_VB_H - 2 * MARGIN_VB);
 }
 function buildPathD(paths, vbPaths) {
   let d = '';
@@ -3123,17 +3134,20 @@ function buildPathD(paths, vbPaths) {
 }
 
 // Builds the bottom-margin text polylines (already in viewBox coords).
+// Label sits right under the composition (bottom of the 4×5 drawing
+// area) rather than at the paper's bottom edge — so the extra paper
+// below the composition stays as a clean white margin.
 function buildBottomLabel(state, strokeCount) {
   const text = 'monument  /  ' + strokeCount + ' strokes  /  bre pettis';
-  const baselineY = VB_H - 18;               // 18 vb above page bottom
+  const baselineY = COMP_VB_H - 18;          // 18 vb above the composition bottom
   // Pick a scale that keeps the label inside the printable width even
   // when the strokeCount runs to 5 digits.
-  const maxWidth = VB_W - 2 * MARGIN_VB;
+  const maxWidth = COMP_VB_W - 2 * MARGIN_VB;
   let scale = 0.032;                         // ~16 vb cap-height (preferred)
   let w = measureText(text, scale);
   if (w > maxWidth) scale *= maxWidth / w;
   w = measureText(text, scale);
-  const startX = (VB_W - w) / 2;
+  const startX = (COMP_VB_W - w) / 2;
   return renderTextStrokes(text, startX, baselineY, scale);
 }
 function lwToStrokeVB(lwMM) { return lwMM * (300 / 25.4); }
@@ -3161,7 +3175,7 @@ function readState() {
     waviness:     3.0,    // sky waviness (gradient / wobbly / box / paper / arcs)
     sandWaviness: 0.75,   // sand-garden ground waviness (decoupled from sky)
     rippleFreq:   10,
-    paperSize:    '4x5',
+    paperSize:    '4x6',
     lw:           0.3,
     density:      2.5,
     bufRes:       400,
@@ -3361,7 +3375,7 @@ function defaultState() {
     camTilt: 6,
     hatchStyle: 'scan', skyStyle: 'gradient', groundStyle: 'perspective',
     waviness: 3.0, rippleFreq: 7.0,
-    paperSize: '4x5',
+    paperSize: '4x6',
     lw: 0.3, density: 2.5, bufRes: 400,
     lx: -0.6, ly: 0.8, lz: -0.4,
     brightness: 0, contrast: 1, gamma: 1, posterLevels: 1
@@ -3531,7 +3545,7 @@ function deriveStateFromSeed(state) {
 // supplied, the scene's UI defaults are used.
 function renderToSvgString(state) {
   // Apply the requested paper size before any of the SX/SY/VB math runs.
-  const paper = PAPER_SIZES[state.paperSize] || PAPER_SIZES['4x5'];
+  const paper = PAPER_SIZES[state.paperSize] || PAPER_SIZES['4x6'];
   setPaperSize(paper.w, paper.h);
   // Seed-driven derivation: fills in any 'auto' fields (sky/ground) from
   // weighted picks, and always sets sun-preset + scene params.
