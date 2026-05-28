@@ -3871,7 +3871,9 @@ function rayMarch(sdf, ox, oy, oz, dx, dy, dz, tMax) {
 function softShadow(sdf, x, y, z, L, maxT, k) {
   let res = 1.0;
   let t = 0.008;
-  for (let i = 0; i < 48; i++) {
+  // 96 iterations + maxT 60 (set at the call sites) covers grazing-angle
+  // sunset shadows out to the page edges.
+  for (let i = 0; i < 96; i++) {
     const d = sdf(x + L[0] * t, y + L[1] * t, z + L[2] * t);
     if (d < 0.001) return 1;          // hard occlusion
     const r = k * d / t;
@@ -3995,13 +3997,13 @@ function renderSceneBuffer(state, sdf, materialFn) {
           const hy = CAM[1] + dy * t + n[1] * 0.004;
           const hz = CAM[2] + dz * t + n[2] * 0.004;
           // maxT 25 + penumbra factor 24 → long soft cast shadows.
-          buf.shadow[idx] = softShadow(sdf, hx, hy, hz, L, 25, 24);
+          buf.shadow[idx] = softShadow(sdf, hx, hy, hz, L, 60, 24);
           buf.ao[idx] = ambientOcclusion(sdf, hx, hy, hz, n[0], n[1], n[2]);
         } else if (hit === 2) {
           const gx = CAM[0] + dx * t;
           const gy = GROUND_Y + 0.005;
           const gz = CAM[2] + dz * t;
-          buf.shadow[idx] = softShadow(sdf, gx, gy, gz, L, 25, 24);
+          buf.shadow[idx] = softShadow(sdf, gx, gy, gz, L, 60, 24);
         }
       }
 

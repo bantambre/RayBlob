@@ -49,7 +49,8 @@
     <div class="field"><label>Ground style</label>
       <select id="groundStyle"
               style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
-        <option value="perspective" selected>Perspective</option>
+        <option value="auto" selected>Auto (from seed)</option>
+        <option value="perspective">Perspective</option>
         <option value="waves">Waves</option>
         <option value="sandGarden">Sand garden</option>
       </select>
@@ -57,7 +58,8 @@
     <div class="field"><label>Sky style</label>
       <select id="skyStyle"
               style="width:120px;padding:5px;background:#1a1a1a;color:#eee;border:1px solid #3a3a3a;border-radius:4px;font:inherit">
-        <option value="gradient" selected>Gradient</option>
+        <option value="auto" selected>Auto (from seed)</option>
+        <option value="gradient">Gradient</option>
         <option value="wobbly">Wobbly lines</option>
         <option value="multiGradient">Box gradient</option>
         <option value="paperGrain">Paper grain</option>
@@ -1011,19 +1013,15 @@ function buildForestTreeHero(rng, style, hx, hz, trunkR, canopyR, H) {
 
 const SCENES = {
   single: {
-    ui: [
-      { id: 'nSpheres',    label: 'Blob spheres', type: 'int',    min: 8,    max: 12,  step: 1,    default: 10  },
-      { id: 'spread',      label: 'Spread',       type: 'number', min: 1.0,  max: 2.5, step: 0.1,  default: 1.5 },
-      { id: 'verticality', label: 'Verticality',  type: 'number', min: 1.5,  max: 1.9, step: 0.1,  default: 1.7 },
-      { id: 'smoothK',     label: 'Smoothing k',  type: 'number', min: 0.3,  max: 0.5, step: 0.05, default: 0.4 }
-    ],
+    // No UI schema — params are seed-driven by deriveStateFromSeed and
+    // read off `state` inside build (not `params`).
     build: function (rng, state, params) {
       return makeBlobSDFAt(rng, {
         center: [0, 0, 0],
-        nSpheres: params.nSpheres,
-        smoothK: params.smoothK,
-        spread: params.spread,
-        verticality: params.verticality,
+        nSpheres: state.nSpheres,
+        smoothK: state.smoothK,
+        spread: state.spread,
+        verticality: state.verticality,
         pointiness: 0
       });
     }
@@ -1080,7 +1078,9 @@ function rayMarch(sdf, ox, oy, oz, dx, dy, dz, tMax) {
 function softShadow(sdf, x, y, z, L, maxT, k) {
   let res = 1.0;
   let t = 0.008;
-  for (let i = 0; i < 48; i++) {
+  // 96 iterations + maxT 60 (set at the call sites) covers grazing-angle
+  // sunset shadows out to the page edges.
+  for (let i = 0; i < 96; i++) {
     const d = sdf(x + L[0] * t, y + L[1] * t, z + L[2] * t);
     if (d < 0.001) return 1;          // hard occlusion
     const r = k * d / t;
@@ -1204,13 +1204,13 @@ function renderSceneBuffer(state, sdf, materialFn) {
           const hy = CAM[1] + dy * t + n[1] * 0.004;
           const hz = CAM[2] + dz * t + n[2] * 0.004;
           // maxT 25 + penumbra factor 24 → long soft cast shadows.
-          buf.shadow[idx] = softShadow(sdf, hx, hy, hz, L, 25, 24);
+          buf.shadow[idx] = softShadow(sdf, hx, hy, hz, L, 60, 24);
           buf.ao[idx] = ambientOcclusion(sdf, hx, hy, hz, n[0], n[1], n[2]);
         } else if (hit === 2) {
           const gx = CAM[0] + dx * t;
           const gy = GROUND_Y + 0.005;
           const gz = CAM[2] + dz * t;
-          buf.shadow[idx] = softShadow(sdf, gx, gy, gz, L, 25, 24);
+          buf.shadow[idx] = softShadow(sdf, gx, gy, gz, L, 60, 24);
         }
       }
 
@@ -3146,34 +3146,31 @@ function getInputValue(id, fallback) {
   return el ? el.value : fallback;
 }
 function readState() {
+  // All visible composition (sky / ground / sun / blob params) is
+  // derived from the seed by deriveStateFromSeed at render time.
+  // Sky and ground can be overridden via dropdown; 'auto' (default)
+  // means the seed picks. Everything else is hardcoded.
   return {
-    seed: document.getElementById('seed').value || '0',
-    scene: 'single',
-    // Scene params (rendered dynamically by renderSceneUi into sceneParamsPanel).
-    nSpheres:    clampInt  (getInputValue('nSpheres',    10),  8,    12,  10),
-    spread:      clampFloat(getInputValue('spread',      1.5), 1.0,  2.5, 1.5),
-    verticality: clampFloat(getInputValue('verticality', 1.7), 1.5,  1.9, 1.7),
-    pointiness:  0,                                  // hardcoded
-    smoothK:     clampFloat(getInputValue('smoothK',     0.4), 0.3,  0.5, 0.4),
-    // Camera / hatching / lighting / tone — all hardcoded for the public build.
-    camTilt:      6,                                 // hardcoded
-    hatchStyle:   'scan',                            // hardcoded
-    skyStyle:     document.getElementById('skyStyle').value,
-    groundStyle:  document.getElementById('groundStyle').value,
-    waviness:     3.0,                               // sky waviness (used by gradient/wobbly/multiGradient/paperGrain/arcs)
-    sandWaviness: 0.75,                              // ground sand-garden waviness (decoupled from sky)
-    rippleFreq:   10,                                // sand-garden ripple frequency
-    paperSize:    '4x5',                             // hardcoded
-    lw:           0.3,                               // hardcoded
-    density:      2.5,                               // hardcoded
-    bufRes:       400,                               // hardcoded
-    lx:           -0.6,                              // hardcoded light direction
-    ly:           0.8,
-    lz:           -0.4,
-    brightness:   0,                                 // hardcoded tone
+    seed:         document.getElementById('seed').value || '0',
+    scene:        'single',
+    pointiness:   0,
+    camTilt:      6,
+    hatchStyle:   'scan',
+    skyStyle:     document.getElementById('skyStyle').value,    // 'auto' or specific
+    groundStyle:  document.getElementById('groundStyle').value, // 'auto' or specific
+    waviness:     3.0,    // sky waviness (gradient / wobbly / box / paper / arcs)
+    sandWaviness: 0.75,   // sand-garden ground waviness (decoupled from sky)
+    rippleFreq:   10,
+    paperSize:    '4x5',
+    lw:           0.3,
+    density:      2.5,
+    bufRes:       400,
+    brightness:   0,
     contrast:     1,
     gamma:        1,
     posterLevels: 1
+    // nSpheres / spread / verticality / smoothK / lx / ly / lz are
+    // filled in by deriveStateFromSeed.
   };
 }
 function clampInt(v, lo, hi, fb) {
@@ -3344,6 +3341,9 @@ function assertDropdownRegistryParity() {
     const sel = document.getElementById(selId);
     if (!sel) continue;
     for (const opt of sel.options) {
+      // 'auto' is a sentinel that means "seed-derive this", handled by
+      // deriveStateFromSeed before the registry is consulted.
+      if (opt.value === 'auto') continue;
       if (!(opt.value in registry)) {
         console.error('Dropdown "' + selId + '" has option "' + opt.value +
                       '" with no matching registry entry');
@@ -3368,6 +3368,148 @@ function defaultState() {
   };
 }
 
+// =============================================================================
+// Seed-driven generation.
+//
+// The public build is meant to be hash-driven: from a single seed string,
+// derive every visible trait. Sky and ground are weighted picks; sun
+// elevation is a preset picked from a weighted list; blob params are
+// uniform-random within their tightened ranges. Everything is exposed
+// as a trait via window.plotterfilesTraits so plotterfiles-gen infra
+// can pick it up later.
+// =============================================================================
+
+const SKY_WEIGHTS = [
+  ['gradient',      30],
+  ['multiGradient', 18],
+  ['paperGrain',    18],
+  ['arcs',          14],
+  ['stars',         12],
+  ['wobbly',         8]
+];
+
+const GROUND_WEIGHTS = [
+  ['perspective', 60],
+  ['waves',       30],
+  ['sandGarden',  10]
+];
+
+// Sun presets. lx/ly/lz are the light direction (from surface toward
+// light source). All come from the left (lx negative), slight back-light
+// (lz negative). Elevation varies the y component.
+const SUN_PRESETS = [
+  { name: 'High noon',   lx: -0.50, ly: 0.87, lz: -0.30, weight: 25 },
+  { name: 'Midmorning',  lx: -0.71, ly: 0.71, lz: -0.30, weight: 40 },
+  { name: 'Afternoon',   lx: -0.85, ly: 0.50, lz: -0.25, weight: 25 },
+  { name: 'Sunset',      lx: -0.95, ly: 0.25, lz: -0.20, weight: 10 }
+];
+
+// Range definitions for the seed-picked blob params.
+const BLOB_RANGES = {
+  nSpheres:    { min: 8,    max: 12,  isInt: true },
+  spread:      { min: 1.0,  max: 2.5 },
+  verticality: { min: 1.5,  max: 1.9 },
+  smoothK:     { min: 0.30, max: 0.50 }
+};
+
+function weightedPick(rng, weights) {
+  let total = 0;
+  for (const [, w] of weights) total += w;
+  let r = rng() * total;
+  for (const [name, w] of weights) {
+    if ((r -= w) <= 0) return name;
+  }
+  return weights[weights.length - 1][0];
+}
+
+function weightedPickObj(rng, items) {
+  let total = 0;
+  for (const it of items) total += it.weight;
+  let r = rng() * total;
+  for (const it of items) {
+    if ((r -= it.weight) <= 0) return it;
+  }
+  return items[items.length - 1];
+}
+
+function pickRange(rng, range) {
+  const v = range.min + rng() * (range.max - range.min);
+  if (range.isInt) return Math.floor(v + 0.5);
+  return v;
+}
+
+// Trait bins for marketplace display.
+function binDensity(n) {
+  if (n <= 8)  return 'Sparse';
+  if (n <= 10) return 'Standard';
+  if (n <= 11) return 'Heavy';
+  return 'Dense';
+}
+function binSmoothness(k) {
+  if (k <= 0.35) return 'Sharp';
+  if (k <= 0.42) return 'Crisp';
+  return 'Soft';
+}
+function binVerticality(v) {
+  if (v <= 1.6) return 'Squat';
+  if (v <= 1.75) return 'Standard';
+  return 'Tall';
+}
+
+// Pretty labels for sky/ground trait display.
+const SKY_LABELS = {
+  gradient: 'Gradient',
+  wobbly: 'Wobbly lines',
+  multiGradient: 'Box gradient',
+  paperGrain: 'Paper grain',
+  arcs: 'Concentric arcs',
+  stars: 'Stars'
+};
+const GROUND_LABELS = {
+  perspective: 'Perspective',
+  waves: 'Waves',
+  sandGarden: 'Sand garden'
+};
+
+// Drive a fresh PRNG seeded with `state.seed` + a salt, so each picked
+// dimension is independent. (Avoids correlations from sampling the same
+// stream the scene SDF later consumes.)
+function deriveStateFromSeed(state) {
+  const seedRng = makeRng(String(state.seed) + ':traits');
+
+  // Sky: honour explicit dropdown choice unless it's 'auto'.
+  if (!state.skyStyle || state.skyStyle === 'auto') {
+    state.skyStyle = weightedPick(seedRng, SKY_WEIGHTS);
+  }
+  // Ground: same auto-vs-manual override.
+  if (!state.groundStyle || state.groundStyle === 'auto') {
+    state.groundStyle = weightedPick(seedRng, GROUND_WEIGHTS);
+  }
+  // Sun preset — always seed-driven (no manual override).
+  const sun = weightedPickObj(seedRng, SUN_PRESETS);
+  state.sunName = sun.name;
+  state.lx = sun.lx;
+  state.ly = sun.ly;
+  state.lz = sun.lz;
+  // Blob params — uniform random in their ranges.
+  state.nSpheres    = pickRange(seedRng, BLOB_RANGES.nSpheres);
+  state.spread      = pickRange(seedRng, BLOB_RANGES.spread);
+  state.verticality = pickRange(seedRng, BLOB_RANGES.verticality);
+  state.smoothK     = pickRange(seedRng, BLOB_RANGES.smoothK);
+
+  // Trait export. plotterfiles-gen infra will pick this up at mint time.
+  state.traits = {
+    Sky:          SKY_LABELS[state.skyStyle] || state.skyStyle,
+    Ground:       GROUND_LABELS[state.groundStyle] || state.groundStyle,
+    Sun:          state.sunName,
+    'Blob density': binDensity(state.nSpheres) + ' (' + state.nSpheres + ')',
+    Smoothness:   binSmoothness(state.smoothK),
+    Verticality:  binVerticality(state.verticality)
+  };
+  // Also stash on window for the gallery / mint pipeline.
+  if (typeof window !== 'undefined') window.plotterfilesTraits = state.traits;
+}
+
 // Synchronous render: state in → SVG markup string out. No DOM reads,
 // no UI updates. The interactive doRender below uses this and then
 // updates the page; the gallery page calls it directly with arbitrary
@@ -3380,6 +3522,9 @@ function renderToSvgString(state) {
   // Apply the requested paper size before any of the SX/SY/VB math runs.
   const paper = PAPER_SIZES[state.paperSize] || PAPER_SIZES['4x5'];
   setPaperSize(paper.w, paper.h);
+  // Seed-driven derivation: fills in any 'auto' fields (sky/ground) from
+  // weighted picks, and always sets sun-preset + scene params.
+  deriveStateFromSeed(state);
   const rng = makeRng(state.seed);
   const sceneEntry = SCENES.single;
   let sceneResult;
@@ -3387,17 +3532,9 @@ function renderToSvgString(state) {
     // Resolve scene params: explicit state.sceneParams > flat state keys
     // (for back-compat with the existing single-scene URL params) >
     // schema defaults.
-    const params = {};
-    for (const c of sceneEntry.ui) {
-      if (state.sceneParams && state.sceneParams[c.id] != null) {
-        params[c.id] = state.sceneParams[c.id];
-      } else if (state[c.id] != null) {
-        params[c.id] = state[c.id];
-      } else {
-        params[c.id] = c.default;
-      }
-    }
-    sceneResult = sceneEntry.build(rng, state, params);
+    // single's params live on state itself (seed-driven); build reads them
+    // directly. Pass an empty params object for signature compatibility.
+    sceneResult = sceneEntry.build(rng, state, {});
   }
   let sdf, sceneCamera = null, sceneMaterialFn = null, sceneBeamMask = null;
   if (typeof sceneResult === 'function') {
@@ -3482,10 +3619,15 @@ window.addEventListener('message', function (e) {
   if (!data || typeof data !== 'object') return;
   if (data.type === 'rayblob:render') {
     try {
-      const result = renderToSvgString(data.state || {});
+      const incomingState = data.state || {};
+      const result = renderToSvgString(incomingState);
+      // deriveStateFromSeed mutates the input state in-place, so the
+      // traits are now on it. Surface them in the reply so the gallery
+      // can label each card without DOM access.
       e.source.postMessage({
         type: 'rayblob:result', requestId: data.requestId,
-        svg: result.svg, strokeCount: result.strokeCount
+        svg: result.svg, strokeCount: result.strokeCount,
+        traits: incomingState.traits || null
       }, '*');
     } catch (err) {
       e.source.postMessage({

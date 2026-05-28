@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>monument · 100-piece preview</title>
+<style>
+  body { margin: 0; padding: 16px; background: #1a1a1a; color: #eee;
+         font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
+  h1   { font-size: 18px; margin: 0 0 8px; }
+  .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; padding: 8px;
+         background: #232323; border-radius: 6px; flex-wrap: wrap; }
+  .bar label { color: #aaa; font-size: 12px; }
+  select, button, input { background: #1a1a1a; color: #eee; border: 1px solid #3a3a3a;
+                          border-radius: 4px; padding: 5px 9px; font: inherit; }
+  button { cursor: pointer; }
+  button:hover { background: #2a2a2a; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #grid { display: grid; gap: 14px;
+          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .card { background: #232323; border: 1px solid #2a2a2a; border-radius: 6px;
+          padding: 8px; }
+  .card svg { width: 100%; height: auto; background: white; border-radius: 3px;
+              display: block; }
+  .card .title { font-weight: 600; margin: 8px 0 4px; color: #cde; font-size: 12px;
+                 font-family: ui-monospace, Menlo, monospace; }
+  .card .traits { font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+                  color: #aab; white-space: pre-wrap; line-height: 1.35; }
+  #status { color: #ccd; margin-left: auto; font-size: 12px; }
+  iframe#renderer { width: 1px; height: 1px; opacity: 0; pointer-events: none;
+                    position: fixed; top: 0; left: 0; border: 0; }
+</style>
+</head>
+<body>
+<h1>monument — 100-piece preview</h1>
+
+<div class="bar">
+  <label>Count</label>
+  <input id="count" type="number" min="1" max="500" step="1" value="100" style="width:60px">
+  <label>Seed prefix</label>
+  <input id="prefix" type="text" value="monument" style="width:100px">
+  <label>Buffer res</label>
+  <input id="bufRes" type="number" min="150" max="800" step="25" value="300" style="width:70px">
+  <button id="run">Run</button>
+  <button id="stop" disabled>Stop</button>
+  <div id="status">idle</div>
+</div>
+
+<div id="grid"></div>
+
+<iframe id="renderer" src="index.html"></iframe>
+
+<script>
+const iframe   = document.getElementById('renderer');
+const runBtn   = document.getElementById('run');
+const stopBtn  = document.getElementById('stop');
+const countInp = document.getElementById('count');
+const prefInp  = document.getElementById('prefix');
+const bufInp   = document.getElementById('bufRes');
+const grid     = document.getElementById('grid');
+const statusEl = document.getElementById('status');
+
+let stopFlag = false;
+let nextRequestId = 0;
+const pendingRequests = {};
+let rendererReadyResolve = null;
+let rendererReadyPromise = new Promise(function (r) { rendererReadyResolve = r; });
+
+function setStatus(msg) { statusEl.textContent = msg; }
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+window.addEventListener('message', function (e) {
+  const data = e.data;
+  if (!data || typeof data !== 'object') return;
+  if (data.type === 'rayblob:ready') {
+    if (rendererReadyResolve) rendererReadyResolve();
+  }
+  if (data.type === 'rayblob:result' ||
+      data.type === 'rayblob:defaultStateResult') {
+    const cb = pendingRequests[data.requestId];
+    if (cb) { cb.resolve(data); delete pendingRequests[data.requestId]; }
+  }
+});
+
+function callIframe(message) {
+  return new Promise(function (resolve, reject) {
+    const requestId = ++nextRequestId;
+    pendingRequests[requestId] = { resolve, reject };
+    iframe.contentWindow.postMessage(
+      Object.assign({ requestId: requestId }, message), '*');
+    setTimeout(function () {
+      if (pendingRequests[requestId]) {
+        delete pendingRequests[requestId];
+        reject(new Error('render request timed out'));
+      }
+    }, 60000);
+  });
+}
+
+// Produce a sequence of stable seed strings: prefix-001, prefix-002, ...
+function seedAt(prefix, i) {
+  return prefix + '-' + String(i + 1).padStart(3, '0');
+}
+
+async function run() {
+  if (runBtn.disabled) return;
+  stopFlag = false;
+  runBtn.disabled = true;
+  stopBtn.disabled = false;
+  setStatus('warming up…');
+  await rendererReadyPromise;
+  let baseDefault;
+  try {
+    const reply = await callIframe({ type: 'rayblob:defaultState' });
+    baseDefault = reply.state;
+  } catch (err) {
+    setStatus('failed to fetch default state: ' + err.message);
+    runBtn.disabled = false;
+    stopBtn.disabled = true;
+    return;
+  }
+  const N = Math.max(1, Math.min(500, parseInt(countInp.value, 10) || 100));
+  const prefix = (prefInp.value || 'monument').trim() || 'monument';
+  const bufRes = Math.max(150, Math.min(800, parseInt(bufInp.value, 10) || 300));
+  grid.innerHTML = '';
+
+  // Pre-create one placeholder card per token so the grid lays out once
+  // up front and fills in as each render completes — no reflow churn.
+  const cards = [];
+  for (let i = 0; i < N; i++) {
+    const seed = seedAt(prefix, i);
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = '<div class="title">' + escapeHtml(seed) + '</div>' +
+                     '<div class="traits">rendering…</div>';
+    grid.appendChild(card);
+    cards.push(card);
+  }
+
+  for (let i = 0; i < N; i++) {
+    if (stopFlag) break;
+    const seed = seedAt(prefix, i);
+    setStatus('rendering ' + (i + 1) + ' / ' + N + ' · ' + seed);
+    const state = Object.assign({}, baseDefault, {
+      seed: seed,
+      bufRes: bufRes,
+      // Force the dropdown overrides to 'auto' so derivation runs.
+      skyStyle: 'auto',
+      groundStyle: 'auto'
+    });
+    const card = cards[i];
+    try {
+      const reply = await callIframe({ type: 'rayblob:render', state: state });
+      // Trait readback: the renderer publishes the trait map on window
+      // (cross-frame); pull from the message if it's there, else fall
+      // back to a textual hash-from-id summary.
+      const traitsText = (reply.traits ? formatTraits(reply.traits) : '');
+      card.innerHTML =
+        reply.svg +
+        '<div class="title">' + escapeHtml(seed) +
+        ' · ' + reply.strokeCount + ' strokes</div>' +
+        '<div class="traits">' + escapeHtml(traitsText) + '</div>';
+    } catch (err) {
+      card.innerHTML = '<div class="title">' + escapeHtml(seed) + '</div>' +
+                       '<div class="traits">ERROR · ' + escapeHtml(err.message) + '</div>';
+    }
+  }
+  setStatus(stopFlag ? 'stopped' : 'done · ' + N + ' renders');
+  runBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+function formatTraits(t) {
+  const order = ['Sky', 'Ground', 'Sun', 'Blob density', 'Smoothness', 'Verticality'];
+  const lines = [];
+  for (const k of order) {
+    if (t[k] != null) lines.push(k + ': ' + t[k]);
+  }
+  return lines.join('\n');
+}
+
+runBtn.addEventListener('click', run);
+stopBtn.addEventListener('click', function () {
+  stopFlag = true; setStatus('stopping…');
+});
+</script>
+</body>
+</html>
