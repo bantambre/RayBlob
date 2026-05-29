@@ -3146,14 +3146,25 @@ function buildTraitsLabel(state) {
   const out = [];
   const traits = state.traits || {};
   const rows = [
-    ['seed:',           state.seed],
+    ['seed:',           state.seed]
+  ];
+  // Edition is optional. When the platform (or gallery) supplies a
+  // number, show "no.: 007 / 100" right under the seed.
+  if (state.edition != null) {
+    const total = state.editionTotal != null ? state.editionTotal : 100;
+    const pad = String(total).length;                          // 3 for 100
+    const num = String(state.edition).padStart(pad, '0');
+    const tot = String(total).padStart(pad, '0');
+    rows.push(['no.:', num + ' / ' + tot]);
+  }
+  rows.push(
     ['sky:',            traits.Sky || ''],
     ['ground:',         traits.Ground || ''],
     ['lighting angle:', traits['Lighting angle'] || ''],
     ['density:',        traits.Density || ''],
     ['smoothness:',     traits.Smoothness || ''],
     ['verticality:',    traits.Verticality || '']
-  ];
+  );
   const scale = 0.022;                 // ~11 vb cap-height; line ~28 vb
   const lineHeight = 32;
   const blockTop = COMP_VB_H + 36;
