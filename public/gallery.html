@@ -149,10 +149,7 @@ async function run() {
       bufRes: bufRes,
       // Force the dropdown overrides to 'auto' so derivation runs.
       skyStyle: 'auto',
-      groundStyle: 'auto',
-      // Numbered edition — gallery cards mirror token mint order.
-      edition: i + 1,
-      editionTotal: N
+      groundStyle: 'auto'
     });
     const card = cards[i];
     try {
@@ -161,12 +158,10 @@ async function run() {
       // (cross-frame); pull from the message if it's there, else fall
       // back to a textual hash-from-id summary.
       const traitsText = (reply.traits ? formatTraits(reply.traits) : '');
-      const pad = String(N).length;
-      const editionLabel = String(i + 1).padStart(pad, '0') + ' / ' + String(N).padStart(pad, '0');
       card.innerHTML =
         reply.svg +
-        '<div class="title">' + escapeHtml('no. ' + editionLabel) + ' · ' +
-        escapeHtml(seed) + ' · ' + reply.strokeCount + ' strokes</div>' +
+        '<div class="title">' + escapeHtml(seed) +
+        ' · ' + reply.strokeCount + ' strokes</div>' +
         '<div class="traits">' + escapeHtml(traitsText) + '</div>';
     } catch (err) {
       card.innerHTML = '<div class="title">' + escapeHtml(seed) + '</div>' +
